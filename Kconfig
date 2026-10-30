@@ -1,0 +1,10 @@
+# SPDX-FileCopyrightText: 2026 roolrz
+# SPDX-License-Identifier: Apache-2.0
+
+config SYSTEM_APP_FS_F2FS_SYSTEM
+    bool "Experimental Fuchsia F2FS worker (/svc/fs-f2fs)"
+    default n
+    depends on SYSTEM_APP_FS_BACKEND_SYSTEM
+    help
+        Build the experimental C++ media core and Native filesystem worker.
+        Use only disposable images produced by the pinned formatter.

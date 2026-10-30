@@ -1,0 +1,21 @@
+{
+  "SPDX-FileCopyrightText": "2026 roolrz",
+  "SPDX-License-Identifier": "Apache-2.0",
+  "version": 1,
+  "name": "fs-f2fs",
+  "kind": "service",
+  "origin": {
+    "repository": "https://github.com/roolrz/HypeR",
+    "commit": "c8ba1d4048827da6fcd679a04c7ff903c44bb940"
+  },
+  "packages": [
+    "hyper-fs-f2fs-system"
+  ],
+  "tests": [
+    [
+      "make",
+      "app-test",
+      "APP_TEST_PACKAGE=hyper-fs-f2fs-system"
+    ]
+  ]
+}

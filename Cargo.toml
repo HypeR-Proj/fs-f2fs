@@ -1,0 +1,31 @@
+# SPDX-FileCopyrightText: 2026 roolrz
+# SPDX-License-Identifier: Apache-2.0
+
+[package]
+workspace = "../../app"
+name = "hyper-fs-f2fs-system"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+repository = "https://github.com/HypeR-Proj/fs-f2fs"
+
+[[bin]]
+name = "hyper-fs-f2fs-system"
+path = "src/main.rs"
+test = false
+bench = false
+
+[dependencies]
+hyper-fs-f2fs = { path = "../../lib/fs-f2fs" }
+hyper-os = { workspace = true, features = ["std"] }
+hyper-rt.workspace = true
+hyper-filesystem.workspace = true
+hyper-fs-service.workspace = true
+hyper-service.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+io-statistics = []
