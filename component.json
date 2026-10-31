@@ -4,18 +4,44 @@
   "version": 1,
   "name": "fs-f2fs",
   "kind": "service",
-  "origin": {
-    "repository": "https://github.com/roolrz/HypeR",
-    "commit": "c8ba1d4048827da6fcd679a04c7ff903c44bb940"
-  },
-  "packages": [
-    "hyper-fs-f2fs-system"
-  ],
   "tests": [
     [
       "make",
       "app-test",
       "APP_TEST_PACKAGE=hyper-fs-f2fs-system"
     ]
+  ],
+  "cargo": [
+    {
+      "manifest": "Cargo.toml",
+      "domain": "system"
+    }
+  ],
+  "build": {
+    "requires": [
+      "lib-fs-f2fs"
+    ],
+    "type": "native-rust"
+  },
+  "artifacts": [
+    {
+      "binary": "hyper-fs-f2fs-system",
+      "staged": "fs-f2fs-system",
+      "destination": "svc/fs-f2fs",
+      "mode": "0755",
+      "profiles": [
+        "development"
+      ],
+      "rust_runtime": "std",
+      "environment": "system",
+      "manifest": "Cargo.toml",
+      "enabled": false,
+      "requires": [
+        {
+          "module": "fs-backend",
+          "artifact": "fs-backend-system"
+        }
+      ]
+    }
   ]
 }

@@ -9,7 +9,7 @@ The kernel-facing filesystem protocol remains unchanged. The worker is disabled
 by default; select `SYSTEM_APP_FS_F2FS_SYSTEM=y` to include it in a product.
 
 Use the [working manifest](https://github.com/HypeR-Proj/manifest/tree/feat/fuchsia-f2fs)
-and [disposable-image acceptance guide](https://github.com/HypeR-Proj/ci/blob/feat/fuchsia-f2fs/fs-f2fs/README.md).
+and [disposable-image acceptance guide](https://github.com/HypeR-Proj/system-tests/blob/feat/fuchsia-f2fs/fs-f2fs/README.md).
 The guide builds this service through the public SDK and exercises write,
 checkpoint, complete QEMU restart, readback, recursive deletion and writeback.
 The `io-statistics` feature prints queue submission counts at unmount.
