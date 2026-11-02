@@ -17,13 +17,13 @@ setup() {
   else
     mount -t f2fs ${image_name} ${MOUNT_DIR}
   fi
-  pushd ${MOUNT_DIR}
+  pushd ${MOUNT_DIR} || exit 1
 }
 
 clean() {
   local image_name=$1
 
-  popd
+  popd || exit 1
   umount ${MOUNT_DIR}
   zstd ${image_name}
   rm ${image_name}
@@ -65,7 +65,6 @@ write_pattern() {
 
     for i in $(seq 0 $(($blockcount-1))); do
         val=$(($i % 256))
-        byte="$(printf "\\$(printf '%03o' $val)")"
         perl -e "print pack('C', $val) x $blocksize" >> "$outfile"
     done
 }
