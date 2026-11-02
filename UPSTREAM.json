@@ -1,0 +1,62 @@
+{
+  "repository": "https://fuchsia.googlesource.com/fuchsia",
+  "revision": "fff7033e9cc337f2ab4fe8629a61c0c66bdb5cff",
+  "trees": [
+    {
+      "path": "src/storage/f2fs",
+      "content_sha256": "bd7e53cc71026595aa62b992c27566ee66b73f712b15758f8b765d41bc012e45"
+    },
+    {
+      "path": "src/storage/lib/buffer",
+      "content_sha256": "d149f6063a8c2740cc96d43a83e524a4ebf95eb59d63a3fa22085c0e39d60927"
+    },
+    {
+      "path": "src/storage/lib/operation",
+      "content_sha256": "216fea799471dfd14d2b8b7bc3d26d6a3d47cc3b60353651b0a6c63dc59146ed"
+    },
+    {
+      "path": "src/storage/lib/vfs/cpp",
+      "content_sha256": "3ac1dbdf981e35e3dd72c467e042d0f0e855c5cdcec29ccade2aad0e1f0b308d"
+    },
+    {
+      "path": "zircon/system/ulib/fbl",
+      "content_sha256": "47c284e3a05a2e195745a3f2c37a969cacd9a46f1012024d6e7da8f99ea21046"
+    },
+    {
+      "path": "zircon/system/ulib/bitmap",
+      "content_sha256": "bd804a955203de58d48e2bf7b73377822b4342e515d0a3f68393c418e204e490"
+    },
+    {
+      "path": "zircon/system/ulib/zx",
+      "content_sha256": "3050c1b66e66ff66946b632ac1a732e47a69a208598cc59ff7bb78ae602c69fc"
+    },
+    {
+      "path": "zircon/system/ulib/zircon-internal",
+      "content_sha256": "e8f0be961498e93c34e35e59509d773adc4813c4ef71eb7f15c0e9819c0bb047"
+    },
+    {
+      "path": "zircon/third_party/ulib/safemath",
+      "content_sha256": "6214737f0b028925d1ec2fa5ab9e02dc0f3ae41fe198b79ea97f0d1c245be261"
+    },
+    {
+      "path": "zircon/system/public",
+      "content_sha256": "bd4df807a75f0e69a7520e2beb6ad08890c07fdb25d782582cf3df0f747e8cbe"
+    },
+    {
+      "path": "sdk/lib/fit",
+      "content_sha256": "28498f853452a384fae497401041af687c7ae28c762c8249009766a2221691d5"
+    },
+    {
+      "path": "sdk/lib/fit-promise",
+      "content_sha256": "4315dba14452f456400b1cd2fc38f4c999992d540bc752d431a0c2d9df9ecc74"
+    },
+    {
+      "path": "sdk/lib/stdcompat",
+      "content_sha256": "e4c368f2e17a2307ed6c0f022d346ce6263fbc6d904593428179d7891f3b95ba"
+    },
+    {
+      "path": "sdk/lib/zircon-assert",
+      "content_sha256": "953e524b14a5ef499a234f3cb0dbffd98492f4b1cc676f855cdb4042c4a0682e"
+    }
+  ]
+}
