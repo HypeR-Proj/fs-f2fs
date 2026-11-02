@@ -2,148 +2,71 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-// This file describes the in-memory structures which construct
-// a F2FS filesystem.
-
-#ifndef SRC_STORAGE_F2FS_BCACHE_H_
-#define SRC_STORAGE_F2FS_BCACHE_H_
-
-#include <fidl/fuchsia.storage.block/cpp/wire.h>
-
+// HypeR platform adapter for the pinned media core.
+#pragma once
+#include "bridge.h"
 #include "src/storage/f2fs/common.h"
-#include "src/storage/lib/block_client/cpp/block_device.h"
-#include "src/storage/lib/buffer/vmo_buffer.h"
-#include "src/storage/lib/buffer/vmoid_registry.h"
-#include "src/storage/lib/vfs/cpp/transaction/device_transaction_handler.h"
-
+#include "src/storage/lib/operation/operation.h"
+namespace fuchsia_storage_block::wire {
+struct BlockInfo {
+  uint32_t block_size;
+  uint64_t block_count;
+};
+}  // namespace fuchsia_storage_block::wire
 namespace f2fs {
-
-class BcacheMapper;
-// It actually creates BcacheMapper on underlying |devices|.
-// It tries to allocate slices on fvm If |allocate| is set.
-zx::result<std::unique_ptr<BcacheMapper>> CreateBcacheMapper(
-    std::vector<std::unique_ptr<block_client::BlockDevice>> devices, bool allocate = false);
-// for the startup service
-zx::result<std::unique_ptr<BcacheMapper>> CreateBcacheMapper(
-    fidl::ClientEnd<fuchsia_storage_block::Block> device, bool allocate = false);
-// for test
-zx::result<std::unique_ptr<BcacheMapper>> CreateBcacheMapper(
-    std::unique_ptr<block_client::BlockDevice> device, bool allocate = false);
-
-class Bcache : public fs::DeviceTransactionHandler, public storage::VmoidRegistry {
+using DeviceCallbacks = HyperF2fsDevice;
+class BcacheMapper {
  public:
-  Bcache(const Bcache&) = delete;
-  Bcache& operator=(const Bcache&) = delete;
-  Bcache(Bcache&&) = delete;
-  Bcache& operator=(Bcache&&) = delete;
-
-  uint64_t Maxblk() const { return max_blocks_; }
-  block_t BlockSize() const { return block_size_; }
-
-  zx_status_t RunRequests(
-      const std::vector<storage::BufferedOperation>& buffered_operations) override;
-  static zx::result<std::unique_ptr<Bcache>> Create(
-      std::unique_ptr<block_client::BlockDevice> device, uint64_t max_blocks, block_t block_size);
-
-  zx_status_t Flush() override { return DeviceTransactionHandler::Flush(); }
-
-  zx_status_t BlockAttachVmo(const zx::vmo& vmo, storage::Vmoid* out) final;
-  zx_status_t BlockDetachVmo(storage::Vmoid vmoid) final;
-
-  uint64_t BlockNumberToDevice(uint64_t block_num) const final {
-    return block_num * BlockSize() / info_.block_size;
+  explicit BcacheMapper(DeviceCallbacks callbacks) : cb_(callbacks) {}
+  bool IsWritable() const { return true; }
+  uint64_t Maxblk() const { return cb_.blocks; }
+  uint32_t BlockSize() const { return 4096; }
+  const uint8_t* Uuid() const { return cb_.uuid; }
+  zx_status_t Readblk(block_t n, void* data) {
+    return n >= Maxblk() ? ZX_ERR_OUT_OF_RANGE
+                         : cb_.read(cb_.context, uint64_t(n) * 4096, data, 4096);
   }
-  size_t GetFreeSpaceSize() const {
-    return use_fvm_ ? (max_slice_count_ - current_slice_count_) * slice_size_ : 0;
+  zx_status_t Writeblk(block_t n, const void* data) {
+    return n >= Maxblk() ? ZX_ERR_OUT_OF_RANGE
+                         : cb_.write(cb_.context, uint64_t(n) * 4096, data, 4096);
   }
-  size_t GetSliceSize() const { return slice_size_; }
+  zx_status_t Flush() { return cb_.flush(cb_.context); }
+  zx_status_t Trim(size_t, size_t) { return ZX_ERR_NOT_SUPPORTED; }
+  zx_status_t BlockGetInfo(fuchsia_storage_block::wire::BlockInfo* out) const {
+    out->block_size = 4096;
+    out->block_count = Maxblk();
+    return ZX_OK;
+  }
 
-  block_client::BlockDevice* GetDevice() final { return device_.get(); }
-
- private:
-  Bcache(std::unique_ptr<block_client::BlockDevice> device, uint64_t max_blocks,
-         block_t block_size);
-
-  size_t slice_size_ = 0;
-  bool use_fvm_ = false;
-  size_t current_slice_count_ = 0;
-  size_t max_slice_count_ = 0;
-  const uint64_t max_blocks_;
-  const block_t block_size_;
-  fuchsia_storage_block::wire::BlockInfo info_ = {};
-  std::unique_ptr<block_client::BlockDevice> device_;  // The device, if owned.
-};
-
-class BcacheMapper : public storage::VmoidRegistry {
- public:
-  BcacheMapper(const BcacheMapper&) = delete;
-  BcacheMapper& operator=(const BcacheMapper&) = delete;
-  BcacheMapper(BcacheMapper&&) = delete;
-  BcacheMapper& operator=(BcacheMapper&&) = delete;
-  static zx::result<std::unique_ptr<BcacheMapper>> Create(
-      std::vector<std::unique_ptr<Bcache>> bcaches);
-
-  // Make a read/write operation from/to a 4KiB block at |bno|.
-  // |buffer_| is used as a block buffer.
-  zx_status_t Readblk(block_t bno, void* data) __TA_EXCLUDES(buffer_mutex_);
-  zx_status_t Writeblk(block_t bno, const void* data) __TA_EXCLUDES(buffer_mutex_);
-
-  zx_status_t Trim(size_t start, size_t num);
-  uint64_t Maxblk() const { return max_blocks_; }
-  block_t BlockSize() const { return block_size_; }
-  zx_status_t BlockGetInfo(fuchsia_storage_block::wire::BlockInfo* out_info) const;
-
-  zx_status_t RunRequests(const std::vector<storage::BufferedOperation>& operations);
-  zx_status_t Flush();
-
-  zx_status_t BlockAttachVmo(const zx::vmo& vmo, storage::Vmoid* out) override;
-  zx_status_t BlockDetachVmo(storage::Vmoid vmoid) override;
-
-  bool IsWritable() const { return !read_only_; }
-  size_t GetFreeSpaceSize() const {
-    size_t free = 0;
-    for (auto& bcache : bcaches_) {
-      free += bcache->GetFreeSpaceSize();
+  zx_status_t RunRequests(const std::vector<storage::BufferedOperation>& ops) {
+    std::vector<HyperF2fsIo> requests;
+    requests.reserve(ops.size());
+    for (const auto& b : ops) {
+      const auto& op = b.op;
+      if (op.dev_offset > Maxblk() || op.length > Maxblk() - op.dev_offset)
+        return ZX_ERR_OUT_OF_RANGE;
+      uint32_t kind;
+      switch (op.type) {
+        case storage::OperationType::kRead:
+          kind = 0;
+          break;
+        case storage::OperationType::kWrite:
+          kind = 1;
+          break;
+        case storage::OperationType::kWriteFua:
+          kind = 2;
+          break;
+        default:
+          return ZX_ERR_NOT_SUPPORTED;
+      }
+      requests.push_back({op.dev_offset * 4096,
+                          static_cast<uint8_t*>(b.data) + op.vmo_offset * 4096, op.length * 4096,
+                          kind});
     }
-    return free;
-  }
-  size_t GetSliceSize() const {
-    size_t slice_size = 0;
-    for (auto& bcache : bcaches_) {
-      slice_size = std::max(slice_size, bcache->GetSliceSize());
-    }
-    return slice_size;
-  }
-  // This function is only used for test and InspectTree purposes.
-  void ForEachBcache(fit::function<void(Bcache*)> func) {
-    for (auto& bcache : bcaches_) {
-      func(bcache.get());
-    }
+    return cb_.run(cb_.context, requests.data(), requests.size());
   }
 
  private:
-  explicit BcacheMapper(std::vector<std::unique_ptr<Bcache>> bcaches, uint64_t max_blocks,
-                        block_t block_size);
-
-  zx::result<vmoid_t> FindFreeVmoId();
-
-  const std::vector<std::unique_ptr<Bcache>> bcaches_;
-
-  // |vmoid_tree_| is a map between the virtual vmoid seen by F2FS and the vmoid actually registered
-  // on the underlying device.
-  std::map<vmoid_t, std::vector<storage::Vmoid>> vmoid_tree_;
-  vmoid_t last_id_ = fuchsia_storage_block::kVmoidInvalid + 1;
-
-  std::mutex buffer_mutex_;
-  // |buffer_| and |buffer_mutex_| are used in the "Readblk/Writeblk" methods.
-  storage::VmoBuffer buffer_ __TA_GUARDED(buffer_mutex_);
-
-  fuchsia_storage_block::wire::BlockInfo info_ = {};
-  const block_t block_size_;
-  const uint64_t max_blocks_;
-  bool read_only_ = false;
+  DeviceCallbacks cb_;
 };
-
 }  // namespace f2fs
-
-#endif  // SRC_STORAGE_F2FS_BCACHE_H_

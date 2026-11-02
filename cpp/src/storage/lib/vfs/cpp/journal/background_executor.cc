@@ -6,8 +6,8 @@
 
 #include <lib/fpromise/promise.h>
 #include <lib/fpromise/result.h>
-#include <lib/zx/thread.h>
-#include <zircon/syscalls/object.h>
+
+
 
 #include <mutex>
 #include <string_view>
@@ -41,7 +41,7 @@ BackgroundExecutor::BackgroundExecutor() {
   executor_.schedule_task(std::move(work));
   thread_ = std::thread([this] {
     constexpr std::string_view thread_name = "journal-thread";
-    zx::thread::self()->set_property(ZX_PROP_NAME, thread_name.data(), thread_name.size());
+
     executor_.run();
   });
 }

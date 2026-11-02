@@ -117,21 +117,9 @@ fpromise::promise<> Writer::GetTaskForWriteIO(PageList to_submit, sync_completio
         auto page = submitted.pop_front();
         // The instance of page->GetVnode() is alive as long as it has any writeback pages.
         if (io_status != ZX_OK) {
-          if (page->GetVnode().IsMeta() || io_status == ZX_ERR_UNAVAILABLE ||
-              io_status == ZX_ERR_PEER_CLOSED) {
-            // When it fails to write metadata or the block device is not available,
-            // set kCpErrorFlag to enter read-only mode.
-            page->fs()->GetSuperblockInfo().SetCpFlags(CpFlag::kCpErrorFlag);
-          } else {
-            // When IO errors occur with node and data Pages, just set a dirty flag
-            // to retry it with another LBA.
-            LockedPage locked_page = LockedPage(page, std::try_to_lock);
-            if (locked_page) {
-              locked_page.SetDirty();
-            } else {
-              page->SetDirty();
-            }
-          }
+          // The Native adapter reports completed aggregate I/O failures. Do not
+          // retry indefinitely or publish a checkpoint that lost payload writes.
+          page->fs()->GetSuperblockInfo().SetCpFlags(CpFlag::kCpErrorFlag);
         }
         if (page->GetVnode().IsNode()) {
           fbl::RefPtr<NodePage>::Downcast(page)->SetFsyncMark(false);

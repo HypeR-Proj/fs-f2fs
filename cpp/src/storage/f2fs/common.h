@@ -6,8 +6,8 @@
 #define SRC_STORAGE_F2FS_COMMON_H_
 
 #include <lib/fit/function.h>
-#include <lib/syslog/cpp/macros.h>
-#include <lib/trace/event.h>
+
+
 #include <lib/zircon-internal/thread_annotations.h>
 #include <lib/zx/result.h>
 #include <sys/types.h>
@@ -16,6 +16,7 @@
 #include <zircon/errors.h>
 #include <zircon/types.h>
 
+#include "fs_port.h"
 #include <limits>
 
 #include <fbl/macros.h>
@@ -23,10 +24,11 @@
 #include <fbl/ref_ptr.h>
 #include <safemath/checked_math.h>
 
-#include "src/storage/lib/vfs/cpp/fuchsia_vfs.h"
-#include "src/storage/lib/vfs/cpp/paged_vfs.h"
+
+
 
 namespace f2fs {
+
 
 class VnodeF2fs;
 
@@ -37,29 +39,29 @@ using ino_t = uint32_t;
 using pgoff_t = uint64_t;
 using umode_t = uint16_t;
 using VnodeCallback = fit::function<zx_status_t(fbl::RefPtr<VnodeF2fs> &)>;
-using SyncCallback = fs::Vnode::SyncCallback;
+using SyncCallback = fit::function<void(zx_status_t)>;
 
 // A async_dispatcher_t* is needed for some functions on Fuchsia only. In order to avoid ifdefs on
 // every call that is compiled for host Fuchsia and Host, we define this as a nullptr_t type when
 // compiling on host where callers should pass null and it's ignored.
 //
 // Prefer async_dispatcher_t* for Fuchsia-specific functions since it makes the intent more clear.
-using FuchsiaDispatcher = async_dispatcher_t *;
+using FuchsiaDispatcher = std::nullptr_t;
 
 // A reference to the vfs is needed for some functions. The specific vfs type is different between
 // Fuchsia and Host, so define a PlatformVfs which represents the one for our current platform to
 // avoid ifdefs on every call.
 //
 // Prefer using the appropriate vfs when the function is only used for one or the other.
-using PlatformVfs = fs::PagedVfs;
+class PlatformVfs {};
 
-#if BYTE_ORDER == BIG_ENDIAN
-inline uint16_t LeToCpu(uint16_t x) { return SWAP_16(x); }
-inline uint32_t LeToCpu(uint32_t x) { return SWAP_32(x); }
-inline uint64_t LeToCpu(uint64_t x) { return SWAP_64(x); }
-inline uint16_t CpuToLe(uint16_t x) { return SWAP_16(x); }
-inline uint32_t CpuToLe(uint32_t x) { return SWAP_32(x); }
-inline uint64_t CpuToLe(uint64_t x) { return SWAP_64(x); }
+#if __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+inline uint16_t LeToCpu(uint16_t x) { return __builtin_bswap16(x); }
+inline uint32_t LeToCpu(uint32_t x) { return __builtin_bswap32(x); }
+inline uint64_t LeToCpu(uint64_t x) { return __builtin_bswap64(x); }
+inline uint16_t CpuToLe(uint16_t x) { return __builtin_bswap16(x); }
+inline uint32_t CpuToLe(uint32_t x) { return __builtin_bswap32(x); }
+inline uint64_t CpuToLe(uint64_t x) { return __builtin_bswap64(x); }
 #else
 inline uint16_t LeToCpu(uint16_t x) { return x; }
 inline uint32_t LeToCpu(uint32_t x) { return x; }

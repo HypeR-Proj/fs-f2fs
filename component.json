@@ -6,6 +6,10 @@
   "kind": "service",
   "tests": [
     [
+      "python3",
+      "{component}/tests/check.py"
+    ],
+    [
       "make",
       "app-test",
       "APP_TEST_PACKAGE=hyper-fs-f2fs-system"
@@ -19,7 +23,7 @@
   ],
   "build": {
     "requires": [
-      "lib-fs-f2fs"
+      "toolchain"
     ],
     "type": "native-rust"
   },
@@ -42,6 +46,67 @@
           "artifact": "fs-backend-system"
         }
       ]
+    },
+    {
+      "source": "FUCHSIA-LICENSE",
+      "destination": "share/licenses/fs-f2fs/FUCHSIA-LICENSE",
+      "mode": "0644",
+      "profiles": [
+        "development"
+      ],
+      "environment": "system"
+    },
+    {
+      "source": "FUCHSIA-PATENTS",
+      "destination": "share/licenses/fs-f2fs/FUCHSIA-PATENTS",
+      "mode": "0644",
+      "profiles": [
+        "development"
+      ],
+      "environment": "system"
+    },
+    {
+      "source": "licenses/ext2-hash",
+      "destination": "share/licenses/fs-f2fs/ext2-hash",
+      "mode": "0644",
+      "profiles": [
+        "development"
+      ],
+      "environment": "system"
+    },
+    {
+      "source": "licenses/safemath",
+      "destination": "share/licenses/fs-f2fs/safemath",
+      "mode": "0644",
+      "profiles": [
+        "development"
+      ],
+      "environment": "system"
+    },
+    {
+      "source": "licenses/libcxx",
+      "destination": "share/licenses/fs-f2fs/libcxx",
+      "mode": "0644",
+      "profiles": [
+        "development"
+      ],
+      "environment": "system"
+    },
+    {
+      "source": "licenses/musl-headers",
+      "destination": "share/licenses/fs-f2fs/musl-headers",
+      "mode": "0644",
+      "profiles": [
+        "development"
+      ],
+      "environment": "system"
     }
-  ]
+  ],
+  "documentation": {
+    "pages": [
+      "README.md",
+      "CONTRIBUTING.md",
+      "SECURITY.md"
+    ]
+  }
 }

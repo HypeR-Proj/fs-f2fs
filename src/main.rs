@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: 2026 roolrz
 // SPDX-License-Identifier: Apache-2.0
 //! Experimental Fuchsia F2FS worker using the common filesystem RPC service.
+pub mod media;
 #[cfg(target_os = "hyper")]
 mod runtime;
 fn main() -> std::process::ExitCode {

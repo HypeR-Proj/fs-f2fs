@@ -18,7 +18,7 @@ namespace f2fs {
 
 constexpr size_t kLastNodeMask = 0x7;
 
-using RawBitmap = bitmap::RawBitmapGeneric<bitmap::VmoStorage>;
+using RawBitmap = bitmap::RawBitmapGeneric<bitmap::DefaultStorage>;
 using RawBitmapHeap = bitmap::RawBitmapGeneric<bitmap::DefaultStorage>;
 
 class Page;

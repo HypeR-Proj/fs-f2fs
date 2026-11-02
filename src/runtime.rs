@@ -1,10 +1,10 @@
 // SPDX-FileCopyrightText: 2026 roolrz
 // SPDX-License-Identifier: Apache-2.0
+use crate::media::{FileSystem, native::BlockDevice};
 use hyper_filesystem::{
     Timestamp,
     protocol::{self, DirectoryCursor, Entry, Error},
 };
-use hyper_fs_f2fs::{FileSystem, native::BlockDevice};
 use hyper_fs_service::Volume;
 use hyper_os::block::{BlockQueue, NativeBlock, QueueConfig};
 struct Mounted(FileSystem<BlockDevice>);
@@ -134,7 +134,7 @@ impl Volume for Mounted {
             .map_err(map_error)
     }
 }
-fn map_error(e: hyper_fs_f2fs::Error) -> Error {
+fn map_error(e: crate::media::Error) -> Error {
     match e.0 {
         -2 => Error::Unsupported,
         -4 => Error::Allocation,
