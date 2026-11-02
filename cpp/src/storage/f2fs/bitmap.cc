@@ -4,7 +4,6 @@
 
 #include "src/storage/f2fs/bitmap.h"
 
-#include <lib/syslog/cpp/macros.h>
 
 #include "src/storage/f2fs/file_cache.h"
 

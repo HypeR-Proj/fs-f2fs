@@ -39,6 +39,7 @@ enum class VnodeSet {
 
 class F2fs final {
  public:
+  ~F2fs();
   // Not copyable or moveable
   F2fs(const F2fs &) = delete;
   F2fs &operator=(const F2fs &) = delete;
@@ -52,7 +53,6 @@ class F2fs final {
                                                   std::unique_ptr<f2fs::BcacheMapper> bc,
                                                   const MountOptions &options, PlatformVfs *vfs);
 
-  zx::result<fs::FilesystemInfo> GetFilesystemInfo();
   InspectTree &GetInspectTree() { return *inspect_tree_; }
 
   zx::result<fbl::RefPtr<VnodeF2fs>> GetVnode(ino_t ino, LockedPage *inode_page = nullptr);
@@ -153,8 +153,7 @@ class F2fs final {
                                   PageType type, bool is_sync = true);
   zx::result<> MakeReadOperation(LockedPage &page, block_t blk_addr, PageType type,
                                  bool is_sync = true);
-  zx::result<> MakeReadOperations(zx::vmo &vmo, std::vector<block_t> &addrs, PageType type,
-                                  bool is_sync = true);
+
   zx_status_t MakeTrimOperation(block_t blk_addr, block_t nblocks) const;
   void ScheduleWritebackAndReclaimPages();
 
@@ -236,7 +235,7 @@ class F2fs final {
       0,
   };
 
-  zx::event fs_id_;
+
   std::unique_ptr<InspectTree> inspect_tree_;
   std::atomic<MemoryPressure> current_memory_pressure_level_ = MemoryPressure::kUnknown;
   std::unique_ptr<MemoryPressureWatcher> memory_pressure_watcher_;

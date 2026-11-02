@@ -11,13 +11,7 @@
 
 namespace f2fs {
 
-static inline bool CopyReadData(zx::vmo &dst, const void *src, size_t from, size_t size) {
-  if (!size) {
-    return false;
-  }
-  dst.write(src, from * Page::Size(), size * Page::Size());
-  return true;
-}
+
 
 Reader::Reader(std::unique_ptr<StorageBufferPool> pool) : bcache_mapper_(pool->Block()) {
   pool_ = std::move(pool);
@@ -45,47 +39,7 @@ std::vector<storage::BufferedOperation> Reader::BuildBufferedOperations(
   return builder.TakeOperations();
 }
 
-zx::result<> Reader::ReadBlocks(zx::vmo &vmo, std::vector<block_t> &addrs) {
-  // indice for |vmo| and |addrs|.
-  size_t from, to = 0;
-  while (to < addrs.size()) {
-    from = to;
-    OwnedStorageBuffer buffer = pool_->Get(addrs.size() - from);
-    auto operations = BuildBufferedOperations(buffer, addrs, to);
-    // If every addr is either kNullAddr or kNewAddr, |operations| is empty.
-    if (operations.empty()) {
-      continue;
-    }
-    zx_status_t io_status = bcache_mapper_->RunRequests(operations);
-    if (io_status != ZX_OK) {
-      FX_LOGS(ERROR) << "read operations failed" << zx_status_get_string(io_status);
-      return zx::error(io_status);
-    }
-    // index for |buffer|.
-    size_t buffer_index = 0;
-    size_t num_pages = to - from;
-    if (buffer->Size() == num_pages) {
-      CopyReadData(vmo, buffer->Data(buffer_index), from, num_pages);
-      continue;
-    }
-    // Copy a valid data chunk to |vmo| at once.
-    num_pages = 0;
-    for (size_t i = from; i < to; ++i) {
-      if (IsValidBlockAddr(addrs[i])) {
-        ++num_pages;
-        continue;
-      }
-      if (CopyReadData(vmo, buffer->Data(buffer_index), from, num_pages)) {
-        buffer_index += num_pages;
-        from += num_pages;
-        num_pages = 0;
-      }
-      ++from;
-    }
-    CopyReadData(vmo, buffer->Data(buffer_index), from, num_pages);
-  }
-  return zx::ok();
-}
+
 
 zx::result<> Reader::ReadBlocks(std::vector<LockedPage> &pages, std::vector<block_t> &addrs) {
   // indice for |pages| and |addrs|.

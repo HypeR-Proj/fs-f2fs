@@ -12,9 +12,7 @@ then
   exit 65
 fi
 
-pushd $1
-REV=`git rev-parse HEAD`
-popd
+REV=$(git -C "$1" rev-parse HEAD)
 
 echo "Updating to Chromium revision $REV"
 

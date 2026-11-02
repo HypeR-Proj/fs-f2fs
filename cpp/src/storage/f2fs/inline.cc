@@ -226,7 +226,7 @@ zx::result<bool> Dir::AddInlineEntry(std::string_view name, VnodeF2fs *vnode) {
 
       DirEntry &de = InlineDentryArray(ipage.get(), *this)[bit_pos];
       de.hash_code = name_hash;
-      de.name_len = static_cast<uint16_t>(CpuToLe(name.length()));
+      de.name_len = static_cast<uint16_t>(CpuToLe(static_cast<uint16_t>(name.length())));
       std::memcpy(InlineDentryFilenameArray(ipage.get(), *this)[bit_pos], name.data(),
                   name.length());
       de.ino = CpuToLe(vnode->Ino());

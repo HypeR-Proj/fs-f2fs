@@ -28,7 +28,7 @@ class Reader {
   // These methods build read operations from |addrs| and request them to underlying storage.
   // On success, it copy read data to |pages| or |vmo|.
   zx::result<> ReadBlocks(std::vector<LockedPage> &pages, std::vector<block_t> &addrs);
-  zx::result<> ReadBlocks(zx::vmo &vmo, std::vector<block_t> &addrs);
+
 
  private:
   std::vector<storage::BufferedOperation> BuildBufferedOperations(OwnedStorageBuffer &buffer,

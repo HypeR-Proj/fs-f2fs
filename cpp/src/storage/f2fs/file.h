@@ -18,6 +18,8 @@ class File : public VnodeF2fs, public fbl::Recyclable<File> {
   explicit File(F2fs* fs, ino_t ino, umode_t mode, std::optional<gid_t> gid = std::nullopt);
   virtual ~File() = default;
 
+  zx_status_t ReadNative(void*,size_t,size_t,size_t*);
+  zx_status_t WriteNative(const void*,size_t,size_t,size_t*);
   // Required for memory management, see the class comment above Vnode for more.
   void fbl_recycle() { RecycleNode(); }
 
@@ -34,12 +36,7 @@ class File : public VnodeF2fs, public fbl::Recyclable<File> {
 
   zx_status_t Truncate(size_t len) final __TA_EXCLUDES(mutex_);
   zx_status_t RecoverInlineData(NodePage& node_page) final;
-  zx_status_t GetVmo(fuchsia_io::wire::VmoFlags flags, zx::vmo* out_vmo) final
-      __TA_EXCLUDES(mutex_);
-  void VmoDirty(uint64_t offset, uint64_t length) final
-      __TA_EXCLUDES(mutex_, f2fs::GetGlobalLock());
-  void VmoRead(uint64_t offset, uint64_t length) final __TA_EXCLUDES(mutex_);
-  zx::result<zx::stream> CreateStream(uint32_t stream_options) final;
+
   block_t GetBlockAddr(LockedPage& page) final;
   zx_status_t ConvertInlineData() __TA_EXCLUDES(mutex_);
   zx::result<LockedPage> FindVictimPage(pgoff_t index) final;
@@ -52,6 +49,8 @@ class File : public VnodeF2fs, public fbl::Recyclable<File> {
   zx_status_t WriteInline(const void* data, size_t len, size_t offset, size_t* out_actual);
 
   size_t MaxFileSize();
+  zx::result<LockedPage> FindDataPageForNative(pgoff_t);
+  zx::result<std::vector<LockedPage>> ReadPagesForNative(pgoff_t,size_t);
 };
 
 }  // namespace f2fs

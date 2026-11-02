@@ -5,9 +5,8 @@
 #ifndef SRC_STORAGE_F2FS_MOUNT_H_
 #define SRC_STORAGE_F2FS_MOUNT_H_
 
-#include <fidl/fuchsia.io/cpp/wire.h>
-#include <fidl/fuchsia.process.lifecycle/cpp/wire.h>
 
+#include "portability.h"
 namespace f2fs {
 
 enum class MountOption {
@@ -60,8 +59,6 @@ class MountOptions {
   std::array<size_t, kMaxOptionCount> opt_ = {1, 0, 1, 1, 1, 0, 0, 1, 0, 0, 1, 6};
 };
 
-zx::result<> StartComponent(fidl::ServerEnd<fuchsia_io::Directory> root,
-                            fidl::ServerEnd<fuchsia_process_lifecycle::Lifecycle> lifecycle);
 
 }  // namespace f2fs
 

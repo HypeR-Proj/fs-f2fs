@@ -4,18 +4,15 @@
 
 #include "src/storage/f2fs/mkfs.h"
 
-#include <lib/syslog/cpp/macros.h>
 
-#include <iostream>
 
-#include <fbl/unique_fd.h>
 #include <safemath/checked_math.h>
 
-#include "src/lib/uuid/uuid.h"
 #include "src/storage/f2fs/bcache.h"
-#include "src/storage/f2fs/bitmap.h"
 
 namespace f2fs {
+inline size_t ToMsbFirst(size_t offset) {return offset + 7 - 2*(offset & 7);}
+template<class T> inline T GetMask(T value,size_t offset) {return value << offset;}
 
 zx::result<std::unique_ptr<BcacheMapper>> MkfsWorker::DoMkfs() {
   InitGlobalParameters();
@@ -315,7 +312,7 @@ zx_status_t MkfsWorker::PrepareSuperblock() {
     return total_zones.error_value();
   }
 
-  memcpy(super_block_.uuid, uuid::Uuid::Generate().bytes(), 16);
+  memcpy(super_block_.uuid, bc_->Uuid(), 16);
 
   std::string vol_label(reinterpret_cast<char const *>(params_.vol_label));
   std::u16string volume_name;
@@ -411,7 +408,7 @@ zx_status_t MkfsWorker::WriteCheckPointPack() {
 
   checkpoint->cur_node_blkoff[0] = CpuToLe(uint16_t{1});
   checkpoint->cur_data_blkoff[0] = CpuToLe(uint16_t{1});
-  checkpoint->valid_block_count = CpuToLe(2UL);
+  checkpoint->valid_block_count = CpuToLe(uint64_t{2});
   checkpoint->rsvd_segment_count = CpuToLe(params_.reserved_segments);
   checkpoint->overprov_segment_count = CpuToLe(params_.op_segments);
   checkpoint->overprov_segment_count = CpuToLe(LeToCpu(checkpoint->overprov_segment_count) +
@@ -619,19 +616,19 @@ zx_status_t MkfsWorker::WriteRootInode() {
 
   raw_node->footer.nid = super_block_.root_ino;
   raw_node->footer.ino = super_block_.root_ino;
-  raw_node->footer.cp_ver = CpuToLe(1UL);
+  raw_node->footer.cp_ver = CpuToLe(uint64_t{1});
   raw_node->footer.next_blkaddr = CpuToLe(
       LeToCpu(super_block_.main_blkaddr) +
       params_.cur_seg[static_cast<int>(CursegType::kCursegHotNode)] * params_.blks_per_seg + 1);
 
   raw_node->i.i_mode = CpuToLe(uint16_t{0x41ed});
   raw_node->i.i_links = CpuToLe(2U);
-  raw_node->i.i_uid = CpuToLe(getuid());
-  raw_node->i.i_gid = CpuToLe(getgid());
+  raw_node->i.i_uid = CpuToLe(uint32_t{0});
+  raw_node->i.i_gid = CpuToLe(uint32_t{0});
 
   uint64_t blk_size_bytes = 1 << LeToCpu(super_block_.log_blocksize);
   raw_node->i.i_size = CpuToLe(1 * blk_size_bytes);  // dentry
-  raw_node->i.i_blocks = CpuToLe(2UL);
+  raw_node->i.i_blocks = CpuToLe(uint64_t{2});
 
   timespec cur_time;
   clock_gettime(CLOCK_REALTIME, &cur_time);

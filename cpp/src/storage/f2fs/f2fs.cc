@@ -4,11 +4,7 @@
 
 #include "src/storage/f2fs/f2fs.h"
 
-#include <lib/async-loop/cpp/loop.h>
-#include <lib/async-loop/default.h>
-#include <lib/async/dispatcher.h>
-#include <lib/trace-provider/provider.h>
-#include <lib/zx/event.h>
+
 #include <sys/stat.h>
 #include <zircon/assert.h>
 #include <zircon/errors.h>
@@ -32,6 +28,7 @@
 #include "src/storage/lib/vfs/cpp/shared_mutex.h"
 
 namespace f2fs {
+F2fs::~F2fs() = default;
 
 static zx_status_t CheckBlockSize(const Superblock& sb) {
   if (kF2fsSuperMagic != LeToCpu(sb.magic)) {
@@ -126,6 +123,11 @@ zx::result<std::unique_ptr<Superblock>> LoadSuperblock(BcacheMapper& bc) {
     if (status = CheckBlockSize(*superblock); status != ZX_OK) {
       continue;
     }
+    if (LeToCpu(superblock->block_count) > bc.Maxblk()) return zx::error(ZX_ERR_OUT_OF_RANGE);
+    const auto* bytes = block.get<uint8_t>();
+    for (size_t offset = kSuperOffset + sizeof(Superblock); offset < kBlockSize; ++offset) {
+      if (bytes[offset]) return zx::error(ZX_ERR_NOT_SUPPORTED);
+    }
     return zx::ok(std::move(superblock));
   }
   FX_LOGS(ERROR) << "failed to read superblock." << status;
@@ -137,20 +139,10 @@ F2fs::F2fs(FuchsiaDispatcher dispatcher, std::unique_ptr<f2fs::BcacheMapper> bc,
     : dispatcher_(dispatcher), vfs_(vfs), bc_(std::move(bc)), mount_options_(mount_options) {
   inspect_tree_ = std::make_unique<InspectTree>(this);
   vnode_cache_ = std::make_unique<VnodeCache>();
-  zx::event::create(0, &fs_id_);
+
 }
 
-void F2fs::StartMemoryPressureWatcher() {
-  if (dispatcher_) {
-    memory_pressure_watcher_ =
-        std::make_unique<MemoryPressureWatcher>(dispatcher_, [this](MemoryPressure level) {
-          // release-acquire ordering with GetMemoryStatus()
-          current_memory_pressure_level_.store(level, std::memory_order_release);
-          ScheduleWritebackAndReclaimPages();
-          FX_LOGS(INFO) << "Memory pressure level: " << MemoryPressureWatcher::ToString(level);
-        });
-  }
-}
+void F2fs::StartMemoryPressureWatcher() {}
 
 zx::result<std::unique_ptr<F2fs>> F2fs::Create(FuchsiaDispatcher dispatcher,
                                                std::unique_ptr<f2fs::BcacheMapper> bc,
@@ -175,31 +167,13 @@ zx::result<std::unique_ptr<F2fs>> F2fs::Create(FuchsiaDispatcher dispatcher,
 }
 
 void F2fs::Sync(SyncCallback closure) {
-  SyncFs(true);
+  auto status = SyncFs(false);
   if (closure) {
-    closure(ZX_OK);
+    closure(status);
   }
 }
 
-zx::result<fs::FilesystemInfo> F2fs::GetFilesystemInfo() {
-  fs::FilesystemInfo info;
-  info.block_size = kBlockSize;
-  info.max_filename_size = kMaxNameLen;
-  info.fs_type = fuchsia_fs::VfsType::kF2Fs;
-  info.total_bytes =
-      safemath::CheckMul<uint64_t>(superblock_info_->GetTotalBlockCount(), kBlockSize).ValueOrDie();
-  info.used_bytes =
-      safemath::CheckMul<uint64_t>(superblock_info_->GetValidBlockCount(), kBlockSize).ValueOrDie();
-  info.total_nodes = superblock_info_->GetMaxNodeCount();
-  info.used_nodes = superblock_info_->GetValidInodeCount();
-  info.SetFsId(fs_id_);
-  info.name = "f2fs";
-  info.free_shared_pool_bytes = fbl::round_down(
-      std::min(bc_->GetFreeSpaceSize(), superblock_info_->GetFreeBlockCount() * kBlockSize),
-      bc_->GetSliceSize());
 
-  return zx::ok(info);
-}
 
 bool F2fs::IsValid() const {
   if (bc_ == nullptr) {
@@ -237,19 +211,7 @@ zx::result<> F2fs::MakeReadOperation(LockedPage& page, block_t blk_addr, PageTyp
   return zx::ok();
 }
 
-zx::result<> F2fs::MakeReadOperations(zx::vmo& vmo, std::vector<block_t>& addrs, PageType type,
-                                      bool is_sync) {
-  auto ret = reader_->ReadBlocks(vmo, addrs);
-  if (ret.is_error()) {
-    FX_LOGS(WARNING) << "failed to read blocks. " << ret.status_string();
-    if (ret.status_value() == ZX_ERR_UNAVAILABLE || ret.status_value() == ZX_ERR_PEER_CLOSED) {
-      // The underlying block device is unavailable. Set kCpErrorFlag for f2fs to enter read-only
-      // mode.
-      superblock_info_->SetCpFlags(CpFlag::kCpErrorFlag);
-    }
-  }
-  return ret;
-}
+
 
 zx::result<> F2fs::MakeReadOperations(std::vector<LockedPage>& pages, std::vector<block_t>& addrs,
                                       PageType type, bool is_sync) {
@@ -353,7 +315,9 @@ zx_status_t F2fs::SyncFsUnsafe(bool bShutdown) {
           }
           return ZX_ERR_NEXT;
         });
-    // Flush every dirty Pages.
+  }
+  {
+    // Flush dirty data before publishing either a live or shutdown checkpoint.
     do {
       // If CpFlag::kCpErrorFlag is set, it cannot be synchronized to disk. So we will drop all
       // dirty pages.

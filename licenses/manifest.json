@@ -1,0 +1,12 @@
+{
+  "SPDX-FileCopyrightText": "2026 roolrz",
+  "SPDX-License-Identifier": "Apache-2.0",
+  "files": [
+    "svc/fs-f2fs/FUCHSIA-LICENSE",
+    "svc/fs-f2fs/FUCHSIA-PATENTS",
+    "svc/fs-f2fs/licenses/ext2-hash",
+    "svc/fs-f2fs/licenses/libcxx",
+    "svc/fs-f2fs/licenses/musl-headers",
+    "svc/fs-f2fs/licenses/safemath"
+  ]
+}

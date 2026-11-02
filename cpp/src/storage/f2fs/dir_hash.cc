@@ -18,7 +18,7 @@ f2fs_hash_t DentryHash(std::string_view name) {
   int len = safemath::checked_cast<int>(name.length());
 
   if (len <= 2 &&
-      ((len == 1 && name[0] == '.') || (len == 2 && name[1] == '.' && name[2] == '.'))) {
+      ((len == 1 && name[0] == '.') || (len == 2 && name[0] == '.' && name[1] == '.'))) {
     return 0;
   }
 

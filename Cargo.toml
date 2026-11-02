@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 roolrz
 # SPDX-License-Identifier: Apache-2.0
 
-bin = [{name = "hyper-fs-f2fs-system", path = "src/main.rs", test = false, bench = false}]
+bin = [{name = "hyper-fs-f2fs-system", path = "src/main.rs", test = true, bench = false}]
 
 [package]
 name = "hyper-fs-f2fs-system"
@@ -30,9 +30,6 @@ version = "=0.0.0"
 
 [dependencies.hyper-fs-service]
 path = "../../lib/fs-service"
-
-[dependencies.hyper-fs-f2fs]
-path = "../../lib/fs-f2fs"
 
 [lints]
 

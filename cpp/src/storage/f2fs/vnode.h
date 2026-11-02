@@ -14,10 +14,8 @@
 #include "src/storage/f2fs/file_cache.h"
 #include "src/storage/f2fs/timestamp.h"
 #include "src/storage/f2fs/xattr.h"
-#include "src/storage/lib/vfs/cpp/paged_vnode.h"
 #include "src/storage/lib/vfs/cpp/shared_mutex.h"
 #include "src/storage/lib/vfs/cpp/vnode.h"
-#include "src/storage/lib/vfs/cpp/watcher.h"
 
 namespace f2fs {
 constexpr uint32_t kNullIno = std::numeric_limits<uint32_t>::max();
@@ -59,7 +57,7 @@ enum class InodeInfoFlag {
 
 inline bool IsValidNameLength(std::string_view name) { return name.length() <= kMaxNameLen; }
 
-class VnodeF2fs : public fs::PagedVnode,
+class VnodeF2fs : public fs::Vnode,
                   public fbl::Recyclable<VnodeF2fs>,
                   public fbl::WAVLTreeContainable<VnodeF2fs*>,
                   public fbl::DoublyLinkedListable<fbl::RefPtr<VnodeF2fs>> {
@@ -105,14 +103,7 @@ class VnodeF2fs : public fs::PagedVnode,
   fuchsia_io::NodeProtocolKinds GetProtocols() const override;
 
   // For fs::PagedVnode
-  zx_status_t GetVmo(fuchsia_io::wire::VmoFlags flags, zx::vmo* out_vmo) override
-      __TA_REQUIRES(mutex_);
-  void VmoRead(uint64_t offset, uint64_t length) override __TA_REQUIRES_SHARED(mutex_);
-  void VmoDirty(uint64_t offset, uint64_t length) override __TA_REQUIRES_SHARED(mutex_);
-  zx::result<size_t> CreateAndPopulateVmo(zx::vmo& vmo, const size_t offset, const size_t length)
-      __TA_REQUIRES_SHARED(mutex_);
-  void OnNoPagedVmoClones() final __TA_REQUIRES(mutex_);
-  void ReleasePagedVmo() __TA_REQUIRES(mutex_);
+
 
   virtual zx_status_t InitInodeMetadata() __TA_EXCLUDES(mutex_)
       __TA_REQUIRES_SHARED(f2fs::GetGlobalLock());
@@ -178,8 +169,7 @@ class VnodeF2fs : public fs::PagedVnode,
   virtual zx::result<PageBitmap> GetBitmap(fbl::RefPtr<Page> dentry_page);
 
   void Notify(std::string_view name, fuchsia_io::wire::WatchEvent event) final;
-  zx_status_t WatchDir(fs::FuchsiaVfs* vfs, fuchsia_io::wire::WatchMask mask, uint32_t options,
-                       fidl::ServerEnd<fuchsia_io::DirectoryWatcher> watcher) final;
+
 
   bool ExtentCacheAvailable();
   void InitExtentTree();
@@ -244,9 +234,8 @@ class VnodeF2fs : public fs::PagedVnode,
   }
 
   // It adjusts both the size and the contents of its VMO.
-  // If the vnode uses a paged VMO, it can invoke VmoDirty() as needed, and the kernel then
-  // guarantees that the VMO’s contents beyond |len| are zero-initialized.
-  virtual void SetSize(const size_t nbytes) __TA_EXCLUDES(mutex_);
+
+  virtual void SetSize(size_t nbytes);
   uint64_t GetSize(bool update_checkpointed_size = false) const;
 
   void SetParentNid(const ino_t pino) { parent_ino_.store(pino, std::memory_order_release); }
@@ -368,7 +357,7 @@ class VnodeF2fs : public fs::PagedVnode,
   FileCache& GetFileCache() { return *file_cache_; }
   void ResetFileCache() { file_cache_->Reset(); }
   ExtentTree& GetExtentTree() { return *extent_tree_; }
-  bool HasPagedVmo() TA_NO_THREAD_SAFETY_ANALYSIS { return paged_vmo().is_valid(); }
+  bool HasPagedVmo() TA_NO_THREAD_SAFETY_ANALYSIS { return false; }
   void ClearAdvise(const FAdvise bit) { advise_ &= ~GetMask(1, static_cast<size_t>(bit)); }
   void SetDirLevel(const uint8_t level) { dir_level_ = level; }
   pgoff_t Writeback(bool is_sync = false, bool is_reclaim = false)
@@ -414,19 +403,12 @@ class VnodeF2fs : public fs::PagedVnode,
   zx_status_t CloseNode() override __TA_EXCLUDES(f2fs::GetGlobalLock(), mutex_);
   void RecycleNode() override;
   VmoManager& vmo_manager() const { return *vmo_manager_; }
-  void ReportPagerError(const uint32_t op, const uint64_t offset, const uint64_t length,
-                        const zx_status_t err) __TA_EXCLUDES(mutex_);
-  void ReportPagerErrorUnsafe(const uint32_t op, const uint64_t offset, const uint64_t length,
-                              const zx_status_t err) __TA_REQUIRES_SHARED(mutex_);
+
 
   bool NeedToSyncDir() const;
   bool NeedToCheckpoint();
   bool NeedToLogInode() const;
 
-  zx::result<size_t> CreatePagedVmo(uint64_t size) __TA_REQUIRES(mutex_);
-  zx_status_t ClonePagedVmo(fuchsia_io::wire::VmoFlags flags, size_t size, zx::vmo* out_vmo)
-      __TA_REQUIRES(mutex_);
-  void SetPagedVmoName() __TA_REQUIRES(mutex_);
   const SuperblockInfo& GetSuperblockInfo() const { return superblock_info_; }
   uint16_t GetExtraSize() const { return extra_isize_; }
   uint64_t GetCurrentDepth() const __TA_REQUIRES_SHARED(mutex_) { return current_depth_; }
@@ -471,7 +453,7 @@ class VnodeF2fs : public fs::PagedVnode,
   const ino_t ino_ = 0;
   F2fs* const fs_ = nullptr;
   umode_t mode_ = 0;
-  fs::WatcherContainer watcher_{};
+
 };
 
 }  // namespace f2fs

@@ -20,7 +20,7 @@ class BcacheMapper;
 
 // F2fs flushes dirty pages when the number of dirty pages >= |kMaxDirtyDataPages| if memorypressure
 // is unavailable.
-constexpr int kMaxDirtyDataPages = 51200;
+constexpr int kMaxDirtyDataPages = 2048;
 
 // This class is final because there might be background threads running when its destructor runs
 // and that would be unsafe if this class had overridden virtual methods that might get called from

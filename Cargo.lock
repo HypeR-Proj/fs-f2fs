@@ -34,18 +34,10 @@ name = "hyper-filesystem"
 version = "0.0.0"
 
 [[package]]
-name = "hyper-fs-f2fs"
-version = "0.1.0"
-dependencies = [
- "hyper-os",
-]
-
-[[package]]
 name = "hyper-fs-f2fs-system"
 version = "0.1.0"
 dependencies = [
  "hyper-filesystem",
- "hyper-fs-f2fs",
  "hyper-fs-service",
  "hyper-os",
  "hyper-rt",

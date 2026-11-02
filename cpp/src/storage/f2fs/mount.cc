@@ -4,35 +4,10 @@
 
 #include "src/storage/f2fs/mount.h"
 
-#include <lib/async-loop/cpp/loop.h>
-#include <lib/async-loop/default.h>
-#include <lib/async/dispatcher.h>
-#include <lib/syslog/cpp/macros.h>
-#include <lib/trace-provider/provider.h>
 
-#include "src/storage/f2fs/component_runner.h"
+
 
 namespace f2fs {
-
-zx::result<> StartComponent(fidl::ServerEnd<fuchsia_io::Directory> root,
-                            fidl::ServerEnd<fuchsia_process_lifecycle::Lifecycle> lifecycle) {
-  async::Loop loop(&kAsyncLoopConfigAttachToCurrentThread);
-  trace::TraceProviderWithFdio trace_provider(loop.dispatcher());
-
-  std::unique_ptr<ComponentRunner> runner(new ComponentRunner(loop.dispatcher()));
-  runner->SetUnmountCallback([&loop]() {
-    loop.Quit();
-    FX_LOGS(INFO) << "unmounted successfully";
-  });
-  auto status = runner->ServeRoot(std::move(root), std::move(lifecycle));
-  if (status.is_error()) {
-    return status;
-  }
-
-  // |ZX_ERR_CANCELED| is returned when the loop is cancelled via |loop.Quit()|.
-  ZX_ASSERT(loop.Run() == ZX_ERR_CANCELED);
-  return zx::ok();
-}
 
 zx::result<size_t> MountOptions::GetValue(const MountOption option) const {
   if (option >= MountOption::kMaxNum)
