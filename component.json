@@ -1,0 +1,47 @@
+{
+  "SPDX-FileCopyrightText": "2026 roolrz",
+  "SPDX-License-Identifier": "Apache-2.0",
+  "version": 1,
+  "name": "fs-f2fs",
+  "kind": "service",
+  "tests": [
+    [
+      "make",
+      "app-test",
+      "APP_TEST_PACKAGE=hyper-fs-f2fs-system"
+    ]
+  ],
+  "cargo": [
+    {
+      "manifest": "Cargo.toml",
+      "domain": "system"
+    }
+  ],
+  "build": {
+    "requires": [
+      "lib-fs-f2fs"
+    ],
+    "type": "native-rust"
+  },
+  "artifacts": [
+    {
+      "binary": "hyper-fs-f2fs-system",
+      "staged": "fs-f2fs-system",
+      "destination": "svc/fs-f2fs",
+      "mode": "0755",
+      "profiles": [
+        "development"
+      ],
+      "rust_runtime": "std",
+      "environment": "system",
+      "manifest": "Cargo.toml",
+      "enabled": false,
+      "requires": [
+        {
+          "module": "fs-backend",
+          "artifact": "fs-backend-system"
+        }
+      ]
+    }
+  ]
+}
