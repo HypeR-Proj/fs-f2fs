@@ -39,7 +39,7 @@
       "rust_runtime": "std",
       "environment": "system",
       "manifest": "Cargo.toml",
-      "enabled": false,
+      "enabled": true,
       "requires": [
         {
           "module": "fs-backend",

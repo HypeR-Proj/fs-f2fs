@@ -95,19 +95,64 @@ def check(status):
         raise RuntimeError(f'F2FS status {status}')
 
 
+def populate(image, root):
+    """Seed regular files/directories in bounded chunks, then checkpoint once."""
+    root = root.resolve(strict=True)
+    if not root.is_dir():
+        raise ValueError('payload root must be a directory')
+    fs = image.library
+    mount = c.c_void_p()
+    check(fs.hyper_f2fs_mount(c.byref(image.device), c.byref(mount)))
+    try:
+        for path in sorted(root.rglob('*')):
+            if path.is_symlink() or not (path.is_file() or path.is_dir()):
+                raise ValueError(f'unsupported F2FS payload entry: {path}')
+            name = path.relative_to(root).as_posix().encode()
+            check(fs.hyper_f2fs_create(mount, name, len(name), int(path.is_dir())))
+            if path.is_file():
+                with path.open('rb') as source:
+                    offset = 0
+                    while data := source.read(128 * 1024):
+                        actual = c.c_size_t()
+                        check(fs.hyper_f2fs_write(mount, name, len(name), offset,
+                                                 data, len(data), c.byref(actual)))
+                        if actual.value != len(data):
+                            raise RuntimeError(f'short F2FS payload write: {path}')
+                        offset += actual.value
+        check(fs.hyper_f2fs_unmount(mount))
+        mount = c.c_void_p()
+    finally:
+        if mount.value:
+            fs.hyper_f2fs_destroy(mount)
+
+
+def format_image(library, output, size_mib, root=None):
+    if not 128 <= size_mib < (1 << 24):
+        raise ValueError('image must be between 128 MiB and 16 TiB')
+    # Exclusive creation protects existing images even on invalid input/failure.
+    stream = output.open('xb')
+    image = None
+    try:
+        with stream:
+            stream.truncate(size_mib * 1024 * 1024)
+        image = Image(library, output)
+        check(image.library.hyper_f2fs_format(c.byref(image.device)))
+        if root is not None:
+            populate(image, root)
+        print(f'Formatted {output}: {image.counts}')
+    except BaseException:
+        output.unlink()
+        raise
+    finally:
+        if image is not None:
+            image.close()
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--library', type=Path, required=True)
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--size-mib', type=int, default=128)
+    parser.add_argument('--root', type=Path, help='seed a tree of regular files and directories')
     args = parser.parse_args()
-    if not 128 <= args.size_mib < (1 << 24):
-        parser.error('image must be between 128 MiB and 16 TiB')
-    with args.output.open('xb') as output:
-        output.truncate(args.size_mib * 1024 * 1024)
-    image = Image(args.library, args.output)
-    try:
-        check(image.library.hyper_f2fs_format(c.byref(image.device)))
-        print(f'Formatted {args.output}: {image.counts}')
-    finally:
-        image.close()
+    format_image(args.library, args.output, args.size_mib, args.root)
