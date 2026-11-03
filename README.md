@@ -39,8 +39,12 @@ a clean shutdown checkpoint. Any failed write sets the core's checkpoint error
 flag and fails synchronization instead of retrying data writes indefinitely.
 Successful page-cache writes alone do not imply durability.
 
+Native reads use at most 512 KiB of temporary file pages per batch. Once copied,
+clean inactive pages are evicted from the C++ file cache; dirty and writeback
+pages remain owned by the core. The kernel file cache serves repeated reads.
+
 The dirty-page threshold is 2,048 pages (8 MiB), using upstream background
-writeback. This is not a hard total-memory quota: inode, directory and clean-page
+writeback. This is not a hard total-memory quota: inode, directory and metadata
 caches have additional costs. The worker retains the ordinary
 128 MiB committed-page ceiling and allows 1,024 mappings/objects for its heap
 regions and staging pools. Exceeding those quotas currently fails the process. Reads do not export physical extents because that
@@ -53,8 +57,9 @@ sector writer: four outstanding queue writes and aggregation of a 4 MiB payload
 plus 80 small files into 23 write submissions. See the [acceptance test](https://github.com/HypeR-Proj/system-tests/blob/main/fs-f2fs/README.md).
 This makes the port a plausible writeback experiment for the I/O VM transport.
 
-The remaining performance risks are substantial: both kernel and C++ caches can
-retain file data; payload still crosses cache, staging and copied queue buffers;
+The remaining performance risks are substantial: dirty file data and metadata
+still consume C++ heap alongside the kernel cache; payload still crosses cache,
+staging and copied queue buffers;
 GC and checkpoint latency have not been characterized under sustained pressure.
 The port also introduces a C++ runtime and replaces Fuchsia's pager with explicit
 heap-backed pages. These costs remain qualification work even though new deployment images use
