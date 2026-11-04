@@ -7,6 +7,8 @@ mod callbacks;
 mod ffi;
 #[cfg(target_os = "hyper")]
 pub mod native;
+#[cfg(any(target_os = "hyper", test))]
+mod read_pipeline;
 use std::{ffi::c_void, marker::PhantomData, ptr::NonNull, rc::Rc, sync::Mutex};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -35,7 +37,9 @@ pub trait Device: Send {
     fn read(&mut self, offset: u64, output: &mut [u8]) -> Result<(), Error>;
     fn write(&mut self, offset: u64, input: &[u8]) -> Result<(), Error>;
     fn flush(&mut self) -> Result<(), Error>;
-    /// Complete all accepted I/O before returning, including the failure path.
+    /// Complete accepted I/O before success and retire every buffer borrow on
+    /// all paths. A poisoned transport may close its kernel-owned requests on
+    /// failure; no further operation may use that transport.
     /// A FUA write must be durable before any later operation in this batch.
     fn run(&mut self, operations: &mut [Operation<'_>]) -> Result<(), Error> {
         for op in operations {
@@ -100,6 +104,10 @@ impl<D: Device> FileSystem<D> {
     pub fn sync(&mut self) -> Result<(), Error> {
         // SAFETY: Exclusive public access; mount and callback owner remain live.
         status(unsafe { ffi::hyper_f2fs_sync(self.raw()?) })
+    }
+    pub fn periodic_sync(&mut self) -> Result<(), Error> {
+        // SAFETY: Exclusive mount access and callback ownership span the entire pass.
+        status(unsafe { ffi::hyper_f2fs_sync_if_dirty(self.raw()?) })
     }
     pub fn close(mut self) -> Result<D, Error> {
         // SAFETY: Successful unmount joins workers and destroys the opaque mount once.

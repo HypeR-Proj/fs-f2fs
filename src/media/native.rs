@@ -16,6 +16,7 @@ pub struct Statistics {
     pub read_bytes: u64,
     pub write_bytes: u64,
     pub peak_writes: usize,
+    pub peak_reads: usize,
 }
 pub struct BlockDevice {
     block: NativeBlock,
@@ -46,6 +47,10 @@ impl BlockDevice {
     }
     pub fn statistics(&self) -> Statistics {
         self.stats
+    }
+    #[cfg(feature = "io-statistics")]
+    pub fn queue_statistics(&self) -> Result<hyper_os::block::QueueInfo, Error> {
+        self.queue()?.info().map_err(error)
     }
     pub fn into_block(mut self) -> Result<NativeBlock, Error> {
         self.drain()?;
@@ -115,6 +120,11 @@ impl BlockDevice {
             }
         }
     }
+    fn read_group(&mut self, operations: &mut [Operation<'_>]) -> Result<(), Error> {
+        self.drain()?;
+        super::read_pipeline::run(self, operations)
+    }
+
     fn write_queued(&mut self, offset: u64, input: &[u8]) -> Result<(), Error> {
         for (index, chunk) in input.chunks(TRANSFER).enumerate() {
             if self.pending.len() == OUTSTANDING {
@@ -131,22 +141,36 @@ impl BlockDevice {
         Ok(())
     }
 }
+impl super::read_pipeline::Queue for BlockDevice {
+    type Ticket = Ticket;
+    fn submit_read(&mut self, sector: u64, bytes: usize) -> Result<Option<Ticket>, Error> {
+        match self.queue()?.submit_read(sector, bytes) {
+            Ok(ticket) => {
+                self.stats.reads += 1;
+                self.stats.read_bytes += bytes as u64;
+                Ok(Some(ticket))
+            }
+            Err(hyper_os::Error::Status(hyper_os::Status::WOULD_BLOCK)) => Ok(None),
+            Err(e) => Err(error(e)),
+        }
+    }
+    fn wait_space(&mut self, bytes: usize) -> Result<(), Error> {
+        self.queue()?.wait_space(bytes, u64::MAX).map_err(error)
+    }
+    fn finish_read(&mut self, ticket: Ticket, output: &mut [u8]) -> Result<(), Error> {
+        let length = output.len();
+        self.finish(ticket, output, length)
+    }
+    fn admitted(&mut self, pending: usize) {
+        self.stats.peak_reads = self.stats.peak_reads.max(pending);
+    }
+}
 impl Device for BlockDevice {
     fn blocks(&self) -> u64 {
         self.blocks
     }
     fn read(&mut self, offset: u64, output: &mut [u8]) -> Result<(), Error> {
-        self.drain()?;
-        for (index, chunk) in output.chunks_mut(TRANSFER).enumerate() {
-            let ticket = self.submit(chunk.len(), |q| {
-                q.submit_read((offset + index as u64 * TRANSFER as u64) / 512, chunk.len())
-            })?;
-            let length = chunk.len();
-            self.finish(ticket, chunk, length)?;
-            self.stats.reads += 1;
-            self.stats.read_bytes += chunk.len() as u64;
-        }
-        Ok(())
+        self.read_group(&mut [Operation::Read { offset, output }])
     }
     fn write(&mut self, offset: u64, input: &[u8]) -> Result<(), Error> {
         let result = self.write_queued(offset, input);
@@ -162,15 +186,25 @@ impl Device for BlockDevice {
     }
     fn run(&mut self, operations: &mut [Operation<'_>]) -> Result<(), Error> {
         let result = (|| {
-            for operation in operations {
-                match operation {
-                    Operation::Read { offset, output } => self.read(*offset, output)?,
-                    Operation::Write { offset, input, fua } => {
+            let mut remaining = operations;
+            while !remaining.is_empty() {
+                let reads = remaining
+                    .iter()
+                    .take_while(|op| matches!(op, Operation::Read { .. }))
+                    .count();
+                if reads != 0 {
+                    let (group, rest) = remaining.split_at_mut(reads);
+                    self.read_group(group)?;
+                    remaining = rest;
+                } else {
+                    let (operation, rest) = remaining.split_first_mut().ok_or(INVALID)?;
+                    if let Operation::Write { offset, input, fua } = operation {
                         self.write_queued(*offset, input)?;
                         if *fua {
                             self.flush()?;
                         }
                     }
+                    remaining = rest;
                 }
             }
             Ok(())

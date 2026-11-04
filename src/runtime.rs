@@ -7,8 +7,14 @@ use hyper_filesystem::{
 };
 use hyper_fs_service::Volume;
 use hyper_os::block::{BlockQueue, NativeBlock, QueueConfig};
-struct Mounted(FileSystem<BlockDevice>);
+struct Mounted(FileSystem<BlockDevice>, std::time::Duration);
 impl Volume for Mounted {
+    fn writeback_policy(&self) -> hyper_fs_service::WritebackPolicy {
+        hyper_fs_service::WritebackPolicy::Periodic(self.1)
+    }
+    fn periodic_sync(&mut self) -> Result<(), Error> {
+        self.0.periodic_sync().map_err(map_error)
+    }
     fn stat(&mut self, path: &str) -> Result<Entry, Error> {
         let metadata = self.0.stat(path).map_err(map_error)?;
         if !matches!(metadata.mode & 0o170000, 0o040000 | 0o100000) {
@@ -196,13 +202,31 @@ pub(super) fn run() -> Result<(), String> {
         ),
     )
     .map_err(show)?;
-    let mut volume = Mounted(FileSystem::mount(device).map_err(show)?);
+    let seconds = match std::env::var("HYPER_F2FS_SYNC_INTERVAL_SECONDS") {
+        Ok(value) => value.parse::<u64>().map_err(show)?,
+        Err(std::env::VarError::NotPresent) => 30,
+        Err(error) => return Err(show(error)),
+    };
+    if !(1..=3600).contains(&seconds) {
+        return Err("sync interval must be 1..=3600 seconds".into());
+    }
+    let mut volume = Mounted(
+        FileSystem::mount(device).map_err(show)?,
+        std::time::Duration::from_secs(seconds),
+    );
     let completion = match adopted {
         Some(state) => hyper_fs_service::resume(state, &mut volume)?,
         None => hyper_fs_service::serve(&mut startup, &mut volume, queue)?,
     };
     let device = volume.0.close().map_err(show)?;
     #[cfg(feature = "io-statistics")]
-    println!("F2FS-IO: {:?}", device.statistics());
+    {
+        println!("F2FS-IO: {:?}", device.statistics());
+        let info = device.queue_statistics().map_err(show)?;
+        println!(
+            "F2FS-QUEUE: ranges={} commands={} merged={} physical_peak={}",
+            info.submitted_ranges, info.dispatched_commands, info.merged_ranges, info.peak_inflight
+        );
+    }
     hyper_fs_service::return_block(completion, device.into_block().map_err(show)?)
 }

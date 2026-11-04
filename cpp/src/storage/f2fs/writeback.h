@@ -47,6 +47,10 @@ class Writer final {
   // It returns after waiting for the storage operation for all pending pages to complete.
   void Sync();
 
+  // Exclusive mount teardown joins producers while F2fs::GetWriter still
+  // refers to this owner. May be repeated by the subsequent destructor.
+  void Shutdown();
+
  private:
   // It returns a task where it builds storage operations from pages and requests the operations to
   // the storage driver server to write the storage operations out to backing storage. On the
@@ -74,6 +78,7 @@ class Writer final {
   fs::BackgroundExecutor executor_;
   // An executor for tasks that allocate blocks for dirty pages.
   fs::BackgroundExecutor writeback_executor_;
+  bool shutdown_ = false;
 };
 
 // A helper class to mitigate notification costs

@@ -28,16 +28,45 @@ successful synchronization.
 
 The Native adapter uses the existing `BlockQueue`, including its admission and
 backpressure rules. Each submission is at most 512 KiB, with at most four writes
-outstanding. Writeback merges adjacent filesystem blocks before submission.
-The callback drains every accepted write before returning, including after a
-later admission failure. No source pointer survives a Native submission.
+outstanding. Consecutive independent read operations also use a bounded four-ticket
+pipeline. Writeback merges adjacent filesystem blocks before submission.
+The callback drains accepted reads and writes before returning, including after a
+later admission failure. A transport failure instead closes the queue: the kernel
+retains its own request storage until physical retirement, and no callback buffer
+remains borrowed. No source pointer survives a Native submission.
+The `io-statistics` build feature reports logical read/write ticket peaks separately
+from the queue's physical in-flight command peak; ticket counts are not device depth.
 
 A preflush completes before checkpoint commit I/O. A FUA operation writes its
 payload, joins it, and completes an explicit queue flush before returning.
 Normal `sync` flushes payload before publishing a live checkpoint; unmount writes
 a clean shutdown checkpoint. Any failed write sets the core's checkpoint error
 flag and fails synchronization instead of retrying data writes indefinitely.
-Successful page-cache writes alone do not imply durability.
+Successful page-cache writes alone do not imply durability. Synchronization trusts
+successful device WRITE/FLUSH responses; it does not read back physical media or
+guarantee hardware behavior beyond the reported protocol result. Reported errors
+are never treated as successful checkpoints.
+
+The ordered service owner synchronizes the volume every 30 seconds, including
+when requests keep arriving. `HYPER_F2FS_SYNC_INTERVAL_SECONDS` in the worker's
+startup environment selects 1–3600 seconds. The interval schedules a checkpoint;
+its completion additionally takes I/O time. A successful pass covers mutations
+accepted before the pass starts. Pressure-driven writeback remains active and
+can run earlier. Slow passes coalesce missed ticks rather than building a backlog.
+Periodic passes inspect the core's dirty vnodes, metadata, orphan state and pending
+writeback under the filesystem lock. Clean passes perform no I/O and do not advance
+the checkpoint version. Explicit sync and shutdown retain their full barriers;
+the clean fast path never hides an existing checkpoint error.
+Handoff and unmount retain explicit synchronization and retire the timer with the
+service owner. There is no second kernel dirty-data cache.
+
+Recovery starts from a valid checkpoint and replays eligible fsync records.
+The Native sync path currently checkpoints the volume; a lightweight per-file
+fsync API is not exposed. Recovery is not an application transaction or an exact
+snapshot rollback: unsynchronized changes may be lost or partly survive. Failed
+replay or checkpoint I/O prevents a successful mount/sync. An empty replay list
+is distinct from an inode lookup failure. Failed mount teardown joins writers
+before releasing page, callback and metadata owners.
 
 Native reads use at most 512 KiB of temporary file pages per batch. Once copied,
 clean inactive pages are evicted from the C++ file cache; dirty and writeback

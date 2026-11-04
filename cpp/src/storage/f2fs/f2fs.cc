@@ -237,6 +237,7 @@ void F2fs::PutSuper() {
   // StopGcThread(superblock_info_.get());
 #endif
   SetTearDown();
+  if (writer_) writer_->Shutdown();
   writer_.reset();
   reader_.reset();
   GetVCache().Reset();
@@ -289,6 +290,20 @@ void F2fs::ScheduleWritebackAndReclaimPages() {
 zx_status_t F2fs::SyncFs(bool bShutdown) {
   std::lock_guard lock(f2fs::GetGlobalLock());
   return SyncFsUnsafe(bShutdown);
+}
+zx_status_t F2fs::SyncFsIfDirty() {
+  std::lock_guard lock(f2fs::GetGlobalLock());
+  // The exclusive filesystem owner excludes mutators and writeback producers.
+  // Check the error before the clean fast path; failed writes can clear page flags.
+  if (superblock_info_->TestCpFlags(CpFlag::kCpErrorFlag)) return ZX_ERR_BAD_STATE;
+  bool dirty = superblock_info_->IsDirty() || !GetVCache().IsDirtyListEmpty() ||
+               GetVnodeSetSize(VnodeSet::kOrphan) != 0 ||
+               GetVnodeSetSize(VnodeSet::kModifiedDir) != 0;
+  for (auto type : {CountType::kDirtyData, CountType::kDirtyDents, CountType::kDirtyNodes,
+                    CountType::kDirtyMeta, CountType::kWriteback}) {
+    dirty |= superblock_info_->GetPageCount(type) != 0;
+  }
+  return dirty ? SyncFsUnsafe(false) : ZX_OK;
 }
 zx_status_t F2fs::SyncFsUnsafe(bool bShutdown) {
   // TODO:: Consider !superblock_info_.IsDirty()
@@ -411,6 +426,11 @@ zx_status_t F2fs::SyncFsUnsafe(bool bShutdown) {
 #endif
 
 void F2fs::Reset() {
+  // Failed mount may already have submitted recovery writes. Join callbacks
+  // while their page, vnode, segment and superblock owners still exist.
+  if (writer_) writer_->Shutdown();
+  writer_.reset();
+  reader_.reset();
   GetVCache().Reset();
   root_vnode_.reset();
   meta_vnode_.reset();
@@ -465,7 +485,7 @@ zx_status_t F2fs::LoadSuper(std::unique_ptr<Superblock> sb) {
   }
 
   if (!superblock_info_->TestOpt(MountOption::kDisableRollForward)) {
-    RecoverFsyncData();
+    if (zx_status_t ret = RecoverFsyncData(); ret != ZX_OK) return ret;
   }
 
   // TODO(https://fxbug.dev/42070949): enable a thread for background gc

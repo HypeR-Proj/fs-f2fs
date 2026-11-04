@@ -83,6 +83,11 @@ extern "C" int32_t hyper_f2fs_sync(void *context)
 	return static_cast<Mounted *>(context)->fs->SyncFs(false);
 }
 
+extern "C" int32_t hyper_f2fs_sync_if_dirty(void *context)
+{
+	return static_cast<Mounted *>(context)->fs->SyncFsIfDirty();
+}
+
 extern "C" int32_t hyper_f2fs_unmount(void *context)
 {
 	auto *m = static_cast<Mounted *>(context);
@@ -252,3 +257,7 @@ extern "C" int32_t hyper_f2fs_times(void *context, const char *path, size_t n,
 	fs::SharedLock global(f2fs::GetGlobalLock());
 	return (*found)->UpdateAttributes(update).status_value();
 }
+
+#ifndef HYPER_F2FS_NATIVE
+#include "tests/bridge.inc"
+#endif

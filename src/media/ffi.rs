@@ -32,6 +32,7 @@ unsafe extern "C" {
     pub fn hyper_f2fs_mount(cb: *const Device, out: *mut *mut c_void) -> i32;
     pub fn hyper_f2fs_unmount(m: *mut c_void) -> i32;
     pub fn hyper_f2fs_sync(m: *mut c_void) -> i32;
+    pub fn hyper_f2fs_sync_if_dirty(m: *mut c_void) -> i32;
     pub fn hyper_f2fs_destroy(m: *mut c_void);
     pub fn hyper_f2fs_create(m: *mut c_void, p: *const c_char, n: usize, directory: u8) -> i32;
     pub fn hyper_f2fs_write(
