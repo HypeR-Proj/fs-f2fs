@@ -474,7 +474,13 @@ zx_status_t F2fs::DoCheckpoint(bool is_umount) {
   superblock_info.ResetAllocBlockCount();
 
   // Commit.
-  if (!superblock_info.TestCpFlags(CpFlag::kCpErrorFlag)) {
+  // Observe every preceding metadata completion before deciding whether this
+  // checkpoint may become recoverable. The commit page is not submitted yet.
+  writer_->Sync();
+  if (superblock_info.TestCpFlags(CpFlag::kCpErrorFlag)) {
+    return ZX_ERR_UNAVAILABLE;
+  }
+  {
     ZX_ASSERT(superblock_info.GetPageCount(CountType::kDirtyMeta) == 1);
     FlushDirtyMetaPages(true);
     if (superblock_info_->TestCpFlags(CpFlag::kCpErrorFlag)) {
@@ -503,6 +509,7 @@ zx_status_t F2fs::WriteCheckpointUnsafe(bool is_umount) {
     return ZX_ERR_BAD_STATE;
   }
   FlushDirsAndNodes();
+  if (superblock_info_->TestCpFlags(CpFlag::kCpErrorFlag)) return ZX_ERR_UNAVAILABLE;
   if (is_umount) {
     FX_LOGS(INFO) << "flushing dirty nodes… done";
   }
@@ -524,6 +531,7 @@ zx_status_t F2fs::WriteCheckpointUnsafe(bool is_umount) {
   if (zx_status_t ret = DoCheckpoint(is_umount); ret != ZX_OK) {
     return ret;
   }
+  if (superblock_info_->TestCpFlags(CpFlag::kCpErrorFlag)) return ZX_ERR_UNAVAILABLE;
 
   // Here, we ensure that all writeback pages are written out.
   if (GetMemoryStatus(MemoryStatus::kNeedReclaim) || is_umount) {

@@ -468,7 +468,9 @@ zx::result<std::vector<LockedPage>> NodeManager::GetNodePages(const std::vector<
   bool need_io = false;
   for (auto nid : nids) {
     NodeInfo ni;
-    GetNodeInfo(nid, ni);
+    if (zx_status_t status = GetNodeInfo(nid, ni); status != ZX_OK) {
+      return zx::error(status);
+    }
     LockedPage page;
     if (zx_status_t ret = fs_->GetNodeVnode().GrabLockedPage(nid, &page); ret != ZX_OK) {
       return zx::error(ret);
@@ -510,7 +512,9 @@ zx::result<std::vector<LockedPage>> NodeManager::GetNodePages(const std::vector<
 
 zx_status_t NodeManager::GetNodePage(nid_t nid, LockedPage *out) {
   NodeInfo ni;
-  GetNodeInfo(nid, ni);
+  if (zx_status_t status = GetNodeInfo(nid, ni); status != ZX_OK) {
+    return status;
+  }
   if (ni.blk_addr == kNullAddr) {
     return ZX_ERR_NOT_FOUND;
   }

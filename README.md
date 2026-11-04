@@ -28,23 +28,58 @@ successful synchronization.
 
 The Native adapter uses the existing `BlockQueue`, including its admission and
 backpressure rules. Each submission is at most 512 KiB, with at most four writes
-outstanding. Writeback merges adjacent filesystem blocks before submission.
-The callback drains every accepted write before returning, including after a
-later admission failure. No source pointer survives a Native submission.
+outstanding. Consecutive independent read operations also use a bounded four-ticket
+pipeline. Writeback merges adjacent filesystem blocks before submission.
+The callback drains accepted reads and writes before returning, including after a
+later admission failure. A transport failure instead closes the queue: the kernel
+retains its own request storage until physical retirement, and no callback buffer
+remains borrowed. No source pointer survives a Native submission.
+The `io-statistics` build feature reports logical read/write ticket peaks separately
+from the queue's physical in-flight command peak; ticket counts are not device depth.
 
 A preflush completes before checkpoint commit I/O. A FUA operation writes its
 payload, joins it, and completes an explicit queue flush before returning.
 Normal `sync` flushes payload before publishing a live checkpoint; unmount writes
 a clean shutdown checkpoint. Any failed write sets the core's checkpoint error
 flag and fails synchronization instead of retrying data writes indefinitely.
-Successful page-cache writes alone do not imply durability.
+Successful page-cache writes alone do not imply durability. Synchronization trusts
+successful device WRITE/FLUSH responses; it does not read back physical media or
+guarantee hardware behavior beyond the reported protocol result. Reported errors
+are never treated as successful checkpoints.
+
+The kernel negotiates VFS-owned file-data writeback at mount. Accepted writes
+populate the common VFS page cache, so reads through independent opens see dirty
+bytes without another filesystem RPC. VFS batches adjacent pages (up to 512 KiB)
+and bounds dirty ownership to 8 MiB per mount within its common cache budget.
+F2FS retires each received data batch and evicts clean temporary copies before
+replying. This does not issue a checkpoint or device-cache flush per batch.
+Node/metadata caches, block allocation, GC and recovery remain owned by F2FS.
+
+The VFS worker drains dirty data and then requests a volume checkpoint every
+30 seconds. `HYPER_F2FS_SYNC_INTERVAL_SECONDS` selects 1–3600 seconds during
+negotiation. The deadline is checked once per second; completion additionally
+takes I/O time. Busy traffic does not postpone the fixed cadence. Explicit sync
+and unmount use the same ordered data-before-checkpoint fence. Worker handoff
+preserves VFS ownership instead of restarting an independent service timer.
+Before negotiation, standalone core users retain the service's periodic policy.
+
+Recovery starts from a valid checkpoint and replays eligible fsync records.
+The Native sync path currently checkpoints the volume; a lightweight per-file
+fsync API is not exposed. Recovery is not an application transaction or an exact
+snapshot rollback: unsynchronized changes may be lost or partly survive. Failed
+replay or checkpoint I/O prevents a successful mount/sync. An empty replay list
+is distinct from an inode lookup failure. Failed mount teardown joins writers
+before releasing page, callback and metadata owners.
 
 Native reads use at most 512 KiB of temporary file pages per batch. Once copied,
 clean inactive pages are evicted from the C++ file cache; dirty and writeback
 pages remain owned by the core. The kernel file cache serves repeated reads.
 
-The dirty-page threshold is 2,048 pages (8 MiB), using upstream background
-writeback. This is not a hard total-memory quota: inode, directory and metadata
+The pressure threshold is 2,048 pages (8 MiB), counting dirty data, directory,
+node and metadata pages together with pages whose writeback has not completed.
+At pressure, the upstream background writer retires a bounded batch before
+admitting more data. Waiting for device writes does not force an extra flush or
+checkpoint; explicit sync and the periodic timer retain those responsibilities. This is not a hard total-memory quota: inode, directory and metadata
 caches have additional costs. The worker retains the ordinary
 128 MiB committed-page ceiling and allows 1,024 mappings/objects for its heap
 regions and staging pools. Exceeding those quotas currently fails the process. Reads do not export physical extents because that
@@ -57,8 +92,8 @@ sector writer: four outstanding queue writes and aggregation of a 4 MiB payload
 plus 80 small files into 23 write submissions. See the [acceptance test](https://github.com/HypeR-Proj/system-tests/blob/main/fs-f2fs/README.md).
 This makes the port a plausible writeback experiment for the I/O VM transport.
 
-The remaining performance risks are substantial: dirty file data and metadata
-still consume C++ heap alongside the kernel cache; payload still crosses cache,
+The remaining performance risks include metadata heap growth and bounded data
+staging in the C++ core; payload still crosses cache,
 staging and copied queue buffers;
 GC and checkpoint latency have not been characterized under sustained pressure.
 The port also introduces a C++ runtime and replaces Fuchsia's pager with explicit

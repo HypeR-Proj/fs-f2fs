@@ -18,8 +18,8 @@ class StorageBufferPool;
 class OwnedStorageBuffer;
 class BcacheMapper;
 
-// F2fs flushes dirty pages when the number of dirty pages >= |kMaxDirtyDataPages| if memorypressure
-// is unavailable.
+// Without a memory-pressure source, bound dirty plus in-flight writeback pages.
+// Submitted pages still occupy the Native heap until their I/O has completed.
 constexpr int kMaxDirtyDataPages = 2048;
 
 // This class is final because there might be background threads running when its destructor runs
@@ -46,6 +46,10 @@ class Writer final {
 
   // It returns after waiting for the storage operation for all pending pages to complete.
   void Sync();
+
+  // Exclusive mount teardown joins producers while F2fs::GetWriter still
+  // refers to this owner. May be repeated by the subsequent destructor.
+  void Shutdown();
 
  private:
   // It returns a task where it builds storage operations from pages and requests the operations to
@@ -74,6 +78,7 @@ class Writer final {
   fs::BackgroundExecutor executor_;
   // An executor for tasks that allocate blocks for dirty pages.
   fs::BackgroundExecutor writeback_executor_;
+  bool shutdown_ = false;
 };
 
 // A helper class to mitigate notification costs

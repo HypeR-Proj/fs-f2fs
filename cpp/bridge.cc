@@ -4,6 +4,7 @@
 #include "bridge.h"
 #include "src/storage/f2fs/f2fs.h"
 #include "src/storage/f2fs/file.h"
+#include "src/storage/f2fs/superblock_info.h"
 #include "src/storage/f2fs/dir.h"
 #include "src/storage/f2fs/mkfs.h"
 #include <cstdarg>
@@ -29,6 +30,7 @@ extern "C" void __zx_panic(const char *format, ...)
 struct Mounted {
 	f2fs::PlatformVfs platform;
 	std::unique_ptr<f2fs::F2fs> fs;
+	bool vfs_writeback = false;
 };
 
 static zx::result<fbl::RefPtr<f2fs::VnodeF2fs>> Lookup(Mounted &m, std::string_view path)
@@ -83,6 +85,11 @@ extern "C" int32_t hyper_f2fs_sync(void *context)
 	return static_cast<Mounted *>(context)->fs->SyncFs(false);
 }
 
+extern "C" int32_t hyper_f2fs_sync_if_dirty(void *context)
+{
+	return static_cast<Mounted *>(context)->fs->SyncFsIfDirty();
+}
+
 extern "C" int32_t hyper_f2fs_unmount(void *context)
 {
 	auto *m = static_cast<Mounted *>(context);
@@ -124,6 +131,16 @@ extern "C" int32_t hyper_f2fs_read(void *context, const char *path, size_t n, ui
 		->ReadNative(buffer, length, offset, actual);
 }
 
+extern "C" int32_t hyper_f2fs_enable_vfs_writeback(void *context)
+{
+	auto &mount = *static_cast<Mounted *>(context);
+	// Complete any pre-negotiation writes before transferring periodic ownership.
+	auto status = mount.fs->SyncFs(false);
+	if (status == ZX_OK)
+		mount.vfs_writeback = true;
+	return status;
+}
+
 extern "C" int32_t hyper_f2fs_write(void *context, const char *path, size_t n, uint64_t offset,
 				    const void *buffer, size_t length, size_t *actual)
 {
@@ -132,8 +149,21 @@ extern "C" int32_t hyper_f2fs_write(void *context, const char *path, size_t n, u
 		return found.error_value();
 	if (!S_ISREG((*found)->GetMode()))
 		return ZX_ERR_NOT_FILE;
-	return static_cast<f2fs::File *>((*found).get())
-		->WriteNative(buffer, length, offset, actual);
+	auto *file = static_cast<f2fs::File *>((*found).get());
+	auto status = file->WriteNative(buffer, length, offset, actual);
+	if (static_cast<Mounted *>(context)->vfs_writeback && *actual != 0) {
+		fs::SharedLock global(f2fs::GetGlobalLock());
+		f2fs::WritebackOperation operation = {.bSync = true, .bReclaim = true};
+		file->Writeback(operation);
+		file->GetFileCache().EvictCleanPages();
+		// Data completion is not an fsync/checkpoint or a device-cache flush.
+		// The original F2FS node, metadata, GC and recovery rules remain intact.
+		if (static_cast<Mounted *>(context)->fs->GetSuperblockInfo().TestCpFlags(f2fs::CpFlag::kCpErrorFlag))
+			return ZX_ERR_IO;
+		if (file->GetDirtyPageCount() != 0)
+			return ZX_ERR_NO_SPACE;
+	}
+	return status;
 }
 
 const char *zx::result<>::status_string() const
@@ -252,3 +282,7 @@ extern "C" int32_t hyper_f2fs_times(void *context, const char *path, size_t n,
 	fs::SharedLock global(f2fs::GetGlobalLock());
 	return (*found)->UpdateAttributes(update).status_value();
 }
+
+#ifndef HYPER_F2FS_NATIVE
+#include "tests/bridge.inc"
+#endif

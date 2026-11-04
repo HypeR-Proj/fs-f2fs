@@ -20,10 +20,16 @@ Writer::Writer(std::unique_ptr<StorageBufferPool> pool)
   pool_ = std::move(pool);
 }
 
-Writer::~Writer() {
+Writer::~Writer() { Shutdown(); }
+
+void Writer::Shutdown() {
+  if (shutdown_) return;
+  // Producers may enqueue I/O while draining their final writeback task.
+  // Stop them before the final I/O fence and before terminating its executor.
+  writeback_executor_.Terminate();
   Sync();
   executor_.Terminate();
-  writeback_executor_.Terminate();
+  shutdown_ = true;
 }
 
 void Writer::Sync() {

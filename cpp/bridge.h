@@ -33,6 +33,8 @@ struct HyperF2fsStat {
 int32_t hyper_f2fs_format(const struct HyperF2fsDevice *);
 int32_t hyper_f2fs_mount(const struct HyperF2fsDevice *, void **);
 int32_t hyper_f2fs_sync(void *);
+int32_t hyper_f2fs_enable_vfs_writeback(void *);
+int32_t hyper_f2fs_sync_if_dirty(void *);
 int32_t hyper_f2fs_unmount(void *);
 // destroy abandons an unsuccessful mount without claiming durable synchronization.
 void hyper_f2fs_destroy(void *);

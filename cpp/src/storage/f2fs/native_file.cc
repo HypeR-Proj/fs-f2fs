@@ -112,6 +112,9 @@ zx_status_t File::WriteNative(const void *input, size_t length, size_t offset, s
 		return ZX_ERR_BAD_STATE;
 	fs()->BalanceFs((length + 2 * kBlockSize - 1) / kBlockSize);
 	fs::SharedLock global(f2fs::GetGlobalLock());
+	// Pressure-driven writeback can fail while BalanceFs waits for its batch.
+	if (GetSuperblockInfo().TestCpFlags(CpFlag::kCpErrorFlag))
+		return ZX_ERR_BAD_STATE;
 	if (TestFlag(InodeInfoFlag::kInlineData)) {
 		auto status = ConvertInlineData();
 		if (status != ZX_OK)
@@ -120,9 +123,16 @@ zx_status_t File::WriteNative(const void *input, size_t length, size_t offset, s
 	std::lock_guard file(mutex_);
 	size_t first = offset / kBlockSize,
 	       count = (offset % kBlockSize + length + kBlockSize - 1) / kBlockSize;
-	auto pages = ReadPagesForNative(first, count);
+	bool full_pages = offset % kBlockSize == 0 && length % kBlockSize == 0;
+	auto pages = full_pages ? GrabLockedPages(first, first + count)
+							: ReadPagesForNative(first, count);
 	if (pages.is_error())
 		return pages.error_value();
+	if (full_pages) {
+		for (auto &page : *pages) {
+			page.WaitOnWriteback();
+		}
+	}
 	auto addresses = GetAddresses(first, count);
 	if (addresses.is_error())
 		return addresses.error_value();
@@ -133,6 +143,7 @@ zx_status_t File::WriteNative(const void *input, size_t length, size_t offset, s
 		auto status = page->Write(static_cast<const uint8_t *>(input) + *actual, begin, n);
 		if (status != ZX_OK)
 			return status;
+		page->SetUptodate();
 		page.SetDirty();
 		offset += n;
 		*actual += n;

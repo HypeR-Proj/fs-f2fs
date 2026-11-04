@@ -237,6 +237,7 @@ void F2fs::PutSuper() {
   // StopGcThread(superblock_info_.get());
 #endif
   SetTearDown();
+  if (writer_) writer_->Shutdown();
   writer_.reset();
   reader_.reset();
   GetVCache().Reset();
@@ -272,7 +273,14 @@ void F2fs::ScheduleWritebackAndReclaimPages() {
               }
               return ZX_ERR_NEXT;
             });
+        // Dirty pages become writeback pages before the device completes. The
+        // Native heap cannot discard those buffers, so retire this bounded batch
+        // before admitting another one or waking the foreground producer.
+        writer_->Sync();
+        if (superblock_info_->TestCpFlags(CpFlag::kCpErrorFlag)) break;
       }
+      // Pressure may consist entirely of previously submitted writeback pages.
+      if (superblock_info_->GetPageCount(CountType::kWriteback)) writer_->Sync();
       // If memory pressure is high even after data writeback, do checkpoint to clear inactive
       // vnodes and to unlock discardable VMOs.
       if (GetMemoryStatus(MemoryStatus::kNeedCheckpoint)) {
@@ -289,6 +297,20 @@ void F2fs::ScheduleWritebackAndReclaimPages() {
 zx_status_t F2fs::SyncFs(bool bShutdown) {
   std::lock_guard lock(f2fs::GetGlobalLock());
   return SyncFsUnsafe(bShutdown);
+}
+zx_status_t F2fs::SyncFsIfDirty() {
+  std::lock_guard lock(f2fs::GetGlobalLock());
+  // The exclusive filesystem owner excludes mutators and writeback producers.
+  // Check the error before the clean fast path; failed writes can clear page flags.
+  if (superblock_info_->TestCpFlags(CpFlag::kCpErrorFlag)) return ZX_ERR_BAD_STATE;
+  bool dirty = superblock_info_->IsDirty() || !GetVCache().IsDirtyListEmpty() ||
+               GetVnodeSetSize(VnodeSet::kOrphan) != 0 ||
+               GetVnodeSetSize(VnodeSet::kModifiedDir) != 0;
+  for (auto type : {CountType::kDirtyData, CountType::kDirtyDents, CountType::kDirtyNodes,
+                    CountType::kDirtyMeta, CountType::kWriteback}) {
+    dirty |= superblock_info_->GetPageCount(type) != 0;
+  }
+  return dirty ? SyncFsUnsafe(false) : ZX_OK;
 }
 zx_status_t F2fs::SyncFsUnsafe(bool bShutdown) {
   // TODO:: Consider !superblock_info_.IsDirty()
@@ -411,6 +433,11 @@ zx_status_t F2fs::SyncFsUnsafe(bool bShutdown) {
 #endif
 
 void F2fs::Reset() {
+  // Failed mount may already have submitted recovery writes. Join callbacks
+  // while their page, vnode, segment and superblock owners still exist.
+  if (writer_) writer_->Shutdown();
+  writer_.reset();
+  reader_.reset();
   GetVCache().Reset();
   root_vnode_.reset();
   meta_vnode_.reset();
@@ -465,7 +492,7 @@ zx_status_t F2fs::LoadSuper(std::unique_ptr<Superblock> sb) {
   }
 
   if (!superblock_info_->TestOpt(MountOption::kDisableRollForward)) {
-    RecoverFsyncData();
+    if (zx_status_t ret = RecoverFsyncData(); ret != ZX_OK) return ret;
   }
 
   // TODO(https://fxbug.dev/42070949): enable a thread for background gc
@@ -608,7 +635,9 @@ bool F2fs::GetMemoryStatus(MemoryStatus status) {
                        (current == MemoryPressure::kUnknown &&
                         superblock_info_->GetPageCount(CountType::kDirtyData) +
                                 superblock_info_->GetPageCount(CountType::kDirtyDents) +
-                                superblock_info_->GetPageCount(CountType::kDirtyNodes) >=
+                                superblock_info_->GetPageCount(CountType::kDirtyNodes) +
+                                superblock_info_->GetPageCount(CountType::kDirtyMeta) +
+                                superblock_info_->GetPageCount(CountType::kWriteback) >=
                             kMaxDirtyDataPages);
 
   switch (status) {
@@ -617,7 +646,8 @@ bool F2fs::GetMemoryStatus(MemoryStatus status) {
 
     case MemoryStatus::kNeedCheckpoint:
       return high_pressure && (superblock_info_->GetPageCount(CountType::kDirtyDents) > 0 ||
-                               superblock_info_->GetPageCount(CountType::kDirtyNodes) > 0);
+                               superblock_info_->GetPageCount(CountType::kDirtyNodes) > 0 ||
+                               superblock_info_->GetPageCount(CountType::kDirtyMeta) > 0);
 
     case MemoryStatus::kNeedWriteback:
       return high_pressure && superblock_info_->GetPageCount(CountType::kDirtyData) > 0;
@@ -632,9 +662,9 @@ void F2fs::WaitForAvailableMemory() {
   }
   fs::SharedLock lock(writeback_mutex_);
   memory_cvar_.wait_for(lock, std::chrono::seconds(kWriteTimeOut), [this]() {
-    if (segment_manager_->HasNotEnoughFreeSecs(0, kDefaultBlocksPerSegment) ||
-        (!GetMemoryStatus(MemoryStatus::kNeedWriteback) &&
-         !GetMemoryStatus(MemoryStatus::kNeedCheckpoint))) {
+    if (superblock_info_->TestCpFlags(CpFlag::kCpErrorFlag) ||
+        segment_manager_->HasNotEnoughFreeSecs(0, kDefaultBlocksPerSegment) ||
+        !GetMemoryStatus(MemoryStatus::kNeedReclaim)) {
       return true;
     }
     ScheduleWritebackAndReclaimPages();
