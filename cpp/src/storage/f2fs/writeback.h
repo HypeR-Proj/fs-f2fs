@@ -18,8 +18,8 @@ class StorageBufferPool;
 class OwnedStorageBuffer;
 class BcacheMapper;
 
-// F2fs flushes dirty pages when the number of dirty pages >= |kMaxDirtyDataPages| if memorypressure
-// is unavailable.
+// Without a memory-pressure source, bound dirty plus in-flight writeback pages.
+// Submitted pages still occupy the Native heap until their I/O has completed.
 constexpr int kMaxDirtyDataPages = 2048;
 
 // This class is final because there might be background threads running when its destructor runs

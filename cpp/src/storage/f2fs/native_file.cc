@@ -112,6 +112,9 @@ zx_status_t File::WriteNative(const void *input, size_t length, size_t offset, s
 		return ZX_ERR_BAD_STATE;
 	fs()->BalanceFs((length + 2 * kBlockSize - 1) / kBlockSize);
 	fs::SharedLock global(f2fs::GetGlobalLock());
+	// Pressure-driven writeback can fail while BalanceFs waits for its batch.
+	if (GetSuperblockInfo().TestCpFlags(CpFlag::kCpErrorFlag))
+		return ZX_ERR_BAD_STATE;
 	if (TestFlag(InodeInfoFlag::kInlineData)) {
 		auto status = ConvertInlineData();
 		if (status != ZX_OK)

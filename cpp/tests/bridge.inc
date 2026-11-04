@@ -18,6 +18,8 @@ extern "C" uint64_t hyper_f2fs_test_state(void *context, unsigned field) {
     case 2: return f2fs::LeToCpu(sb.GetSuperblock().cp_blkaddr);
     case 3: return sb.GetBlocksPerSeg();
     case 4: return f2fs::LeToCpu(sb.GetSuperblock().nat_blkaddr);
+    case 5: return sb.GetPageCount(f2fs::CountType::kDirtyData);
+    case 6: return sb.GetPageCount(f2fs::CountType::kWriteback);
     default: return 0;
   }
 }

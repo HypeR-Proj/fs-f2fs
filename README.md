@@ -72,8 +72,11 @@ Native reads use at most 512 KiB of temporary file pages per batch. Once copied,
 clean inactive pages are evicted from the C++ file cache; dirty and writeback
 pages remain owned by the core. The kernel file cache serves repeated reads.
 
-The dirty-page threshold is 2,048 pages (8 MiB), using upstream background
-writeback. This is not a hard total-memory quota: inode, directory and metadata
+The pressure threshold is 2,048 pages (8 MiB), counting dirty data, directory,
+node and metadata pages together with pages whose writeback has not completed.
+At pressure, the upstream background writer retires a bounded batch before
+admitting more data. Waiting for device writes does not force an extra flush or
+checkpoint; explicit sync and the periodic timer retain those responsibilities. This is not a hard total-memory quota: inode, directory and metadata
 caches have additional costs. The worker retains the ordinary
 128 MiB committed-page ceiling and allows 1,024 mappings/objects for its heap
 regions and staging pools. Exceeding those quotas currently fails the process. Reads do not export physical extents because that
