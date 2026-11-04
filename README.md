@@ -1,14 +1,16 @@
 <!-- SPDX-FileCopyrightText: 2026 roolrz -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 
-# Experimental F2FS service
+# F2FS service
 
 This repository owns the checked-in Fuchsia-derived C++ media implementation,
 its Rust adapter and the Native filesystem worker. There is one Cargo package;
 `src/media/` is an internal module, while `src/runtime.rs` adapts the common
 filesystem service protocol. The kernel has no C++ or F2FS dependency.
-The worker is disabled by default (`SYSTEM_APP_FS_F2FS_SYSTEM=n`); ordinary
-persistent images remain FAT.
+The worker is enabled by default (`SYSTEM_APP_FS_F2FS_SYSTEM=y`). New ordinary
+persistent images use F2FS. Existing FAT media is not automatically converted.
+The host formatter uses the same checked-in media core and seeds initial files;
+no Fuchsia download or Linux `mkfs.f2fs` installation is required.
 
 The C++ core retains Fuchsia's inode, directory, NAT/SIT, segment allocation,
 checkpoint, garbage collection and writeback code. The patch removes Zircon
@@ -37,9 +39,13 @@ a clean shutdown checkpoint. Any failed write sets the core's checkpoint error
 flag and fails synchronization instead of retrying data writes indefinitely.
 Successful page-cache writes alone do not imply durability.
 
+Native reads use at most 512 KiB of temporary file pages per batch. Once copied,
+clean inactive pages are evicted from the C++ file cache; dirty and writeback
+pages remain owned by the core. The kernel file cache serves repeated reads.
+
 The dirty-page threshold is 2,048 pages (8 MiB), using upstream background
-writeback. This is not a hard total-memory quota: inode, directory and clean-page
-caches have additional costs. The experimental worker retains the ordinary
+writeback. This is not a hard total-memory quota: inode, directory and metadata
+caches have additional costs. The worker retains the ordinary
 128 MiB committed-page ceiling and allows 1,024 mappings/objects for its heap
 regions and staging pools. Exceeding those quotas currently fails the process. Reads do not export physical extents because that
 would bypass dirty data held by the media implementation.
@@ -51,16 +57,17 @@ sector writer: four outstanding queue writes and aggregation of a 4 MiB payload
 plus 80 small files into 23 write submissions. See the [acceptance test](https://github.com/HypeR-Proj/system-tests/blob/main/fs-f2fs/README.md).
 This makes the port a plausible writeback experiment for the I/O VM transport.
 
-The remaining performance risks are substantial: both kernel and C++ caches can
-retain file data; payload still crosses cache, staging and copied queue buffers;
+The remaining performance risks are substantial: dirty file data and metadata
+still consume C++ heap alongside the kernel cache; payload still crosses cache,
+staging and copied queue buffers;
 GC and checkpoint latency have not been characterized under sustained pressure.
 The port also introduces a C++ runtime and replaces Fuchsia's pager with explicit
-heap-backed pages. It is appropriate for controlled comparison, while replacing
-production persistence requires those memory, GC and crash-recovery tests first.
+heap-backed pages. These costs remain qualification work even though new deployment images use
+F2FS by default.
 
 ## Supported contract and limits
 
-The experimental worker supports regular files, directories, paginated listing,
+The worker supports regular files, directories, paginated listing,
 read/write, rename, removal, truncate, timestamps, sync and orderly handoff.
 New nodes use mode `0777`, matching the current FAT worker's writable Native
 mode projection. Read-only mounts, symlinks, hard links, extended attributes,
@@ -73,7 +80,7 @@ that the media geometry covers the recorded block count. This is deliberately
 narrower than accepting arbitrary Linux `mkfs.f2fs` output. Times before the Unix
 epoch or beyond the signed nanosecond range are rejected.
 
-This is a disposable-media integration, not a qualified replacement for `/data`.
+The default image format does not imply exhaustive media qualification.
 Long-running GC/full-disk workloads, exhaustive allocation and I/O fault injection,
 unclean shutdown/power-loss recovery, Linux interoperability, hard cache limits,
 and real SD/NVMe performance still need qualification. QEMU timing is not a

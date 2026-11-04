@@ -66,19 +66,37 @@ zx_status_t File::ReadNative(void *output, size_t length, size_t offset, size_t 
 			*actual = length;
 		return status;
 	}
-	size_t first = offset / kBlockSize,
-	       count = (offset % kBlockSize + length + kBlockSize - 1) / kBlockSize;
-	auto pages = ReadPagesForNative(first, count);
-	if (pages.is_error())
-		return pages.error_value();
-	for (auto &page : *pages) {
-		size_t begin = offset % kBlockSize,
-		       n = std::min(length - *actual, kBlockSize - begin);
-		auto status = page->Read(static_cast<uint8_t *>(output) + *actual, begin, n);
+	// The kernel already caches file data. Bound temporary read pages and release
+	// clean copies after each batch; retaining them in the heap-backed VMO adapter
+	// exhausts a Native worker's resource domain on an ordinary large image read.
+	constexpr size_t kReadBatchBytes = 512 * 1024;
+	while (*actual < length) {
+		size_t batch = std::min(length - *actual, kReadBatchBytes - offset % kBlockSize);
+		auto read_batch = [&]() -> zx_status_t {
+			size_t first = offset / kBlockSize,
+			       count = (offset % kBlockSize + batch + kBlockSize - 1) / kBlockSize;
+			auto pages = ReadPagesForNative(first, count);
+			if (pages.is_error())
+				return pages.error_value();
+			for (auto &page : *pages) {
+				size_t begin = offset % kBlockSize,
+				       n = std::min(batch, kBlockSize - begin);
+				auto status = page->Read(static_cast<uint8_t *>(output) + *actual,
+							 begin, n);
+				if (status != ZX_OK)
+					return status;
+				offset += n;
+				*actual += n;
+				batch -= n;
+			}
+			return ZX_OK;
+		};
+		auto status = read_batch();
+		// LockedPage references are gone. Eviction skips dirty or active pages,
+		// including background writeback, and never discards uncommitted data.
+		GetFileCache().EvictCleanPages();
 		if (status != ZX_OK)
 			return status;
-		offset += n;
-		*actual += n;
 	}
 	return ZX_OK;
 }

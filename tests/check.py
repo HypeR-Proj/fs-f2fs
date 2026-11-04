@@ -14,3 +14,6 @@ subprocess.run([sys.executable, str(component / 'build.py'), '--host', '--output
                 str(output)], check=True)
 subprocess.run([sys.executable, str(component / 'tests/host.py'),
                 str(output / 'libhyper-f2fs.so')], check=True)
+
+subprocess.run([sys.executable, str(component / "tests/format.py"),
+                str(output / "libhyper-f2fs.so")], check=True)

@@ -7,8 +7,10 @@
 import argparse
 from concurrent.futures import ThreadPoolExecutor
 import hashlib
+import fcntl
 import json
 import os
+import shutil
 from pathlib import Path
 import subprocess
 import sys
@@ -18,6 +20,12 @@ HERE = Path(__file__).resolve().parent
 
 def build(sdk, output):
     output.mkdir(parents=True, exist_ok=True)
+    with (output / '.build.lock').open('a') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        return build_locked(sdk, output)
+
+
+def build_locked(sdk, output):
     environment = dict(os.environ)
     if sdk is None:
         flags = [os.environ.get('HYPER_HOST_CXX', '/usr/bin/clang++' if sys.platform == 'darwin' else 'clang++'), '-std=c++20', '-g', '-O1',
@@ -82,7 +90,10 @@ def build(sdk, output):
             built = list(pool.map(compile, files))
         temporary = output / 'libhyper-f2fs.tmp'
         temporary.unlink(missing_ok=True)
-        subprocess.run([os.environ.get('LLVM_AR', 'llvm-ar'), 'rcs', str(temporary)] + built,
+        archiver = os.environ.get('LLVM_AR') or shutil.which('llvm-ar') or shutil.which('ar')
+        if not archiver:
+            raise FileNotFoundError('LLVM_AR, llvm-ar or ar is required to archive the F2FS core')
+        subprocess.run([archiver, 'rcs', str(temporary)] + built,
                        check=True)
         archive.parent.mkdir(parents=True, exist_ok=True)
         temporary.replace(archive)
