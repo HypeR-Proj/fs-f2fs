@@ -47,18 +47,21 @@ successful device WRITE/FLUSH responses; it does not read back physical media or
 guarantee hardware behavior beyond the reported protocol result. Reported errors
 are never treated as successful checkpoints.
 
-The ordered service owner synchronizes the volume every 30 seconds, including
-when requests keep arriving. `HYPER_F2FS_SYNC_INTERVAL_SECONDS` in the worker's
-startup environment selects 1–3600 seconds. The interval schedules a checkpoint;
-its completion additionally takes I/O time. A successful pass covers mutations
-accepted before the pass starts. Pressure-driven writeback remains active and
-can run earlier. Slow passes coalesce missed ticks rather than building a backlog.
-Periodic passes inspect the core's dirty vnodes, metadata, orphan state and pending
-writeback under the filesystem lock. Clean passes perform no I/O and do not advance
-the checkpoint version. Explicit sync and shutdown retain their full barriers;
-the clean fast path never hides an existing checkpoint error.
-Handoff and unmount retain explicit synchronization and retire the timer with the
-service owner. There is no second kernel dirty-data cache.
+The kernel negotiates VFS-owned file-data writeback at mount. Accepted writes
+populate the common VFS page cache, so reads through independent opens see dirty
+bytes without another filesystem RPC. VFS batches adjacent pages (up to 512 KiB)
+and bounds dirty ownership to 8 MiB per mount within its common cache budget.
+F2FS retires each received data batch and evicts clean temporary copies before
+replying. This does not issue a checkpoint or device-cache flush per batch.
+Node/metadata caches, block allocation, GC and recovery remain owned by F2FS.
+
+The VFS worker drains dirty data and then requests a volume checkpoint every
+30 seconds. `HYPER_F2FS_SYNC_INTERVAL_SECONDS` selects 1–3600 seconds during
+negotiation. The deadline is checked once per second; completion additionally
+takes I/O time. Busy traffic does not postpone the fixed cadence. Explicit sync
+and unmount use the same ordered data-before-checkpoint fence. Worker handoff
+preserves VFS ownership instead of restarting an independent service timer.
+Before negotiation, standalone core users retain the service's periodic policy.
 
 Recovery starts from a valid checkpoint and replays eligible fsync records.
 The Native sync path currently checkpoints the volume; a lightweight per-file
@@ -89,8 +92,8 @@ sector writer: four outstanding queue writes and aggregation of a 4 MiB payload
 plus 80 small files into 23 write submissions. See the [acceptance test](https://github.com/HypeR-Proj/system-tests/blob/main/fs-f2fs/README.md).
 This makes the port a plausible writeback experiment for the I/O VM transport.
 
-The remaining performance risks are substantial: dirty file data and metadata
-still consume C++ heap alongside the kernel cache; payload still crosses cache,
+The remaining performance risks include metadata heap growth and bounded data
+staging in the C++ core; payload still crosses cache,
 staging and copied queue buffers;
 GC and checkpoint latency have not been characterized under sustained pressure.
 The port also introduces a C++ runtime and replaces Fuchsia's pager with explicit

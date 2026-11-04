@@ -12,6 +12,9 @@ impl Volume for Mounted {
     fn writeback_policy(&self) -> hyper_fs_service::WritebackPolicy {
         hyper_fs_service::WritebackPolicy::Periodic(self.1)
     }
+    fn enable_vfs_writeback(&mut self) -> Result<(), Error> {
+        self.0.enable_vfs_writeback().map_err(map_error)
+    }
     fn periodic_sync(&mut self) -> Result<(), Error> {
         self.0.periodic_sync().map_err(map_error)
     }

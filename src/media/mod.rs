@@ -101,6 +101,10 @@ impl<D: Device> FileSystem<D> {
     fn raw(&self) -> Result<*mut c_void, Error> {
         self.mount.map(NonNull::as_ptr).ok_or(INVALID)
     }
+    pub fn enable_vfs_writeback(&mut self) -> Result<(), Error> {
+        // SAFETY: Exclusive mount access; the mode is retained across handoff.
+        status(unsafe { ffi::hyper_f2fs_enable_vfs_writeback(self.raw()?) })
+    }
     pub fn sync(&mut self) -> Result<(), Error> {
         // SAFETY: Exclusive public access; mount and callback owner remain live.
         status(unsafe { ffi::hyper_f2fs_sync(self.raw()?) })
