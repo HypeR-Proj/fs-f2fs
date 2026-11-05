@@ -39,7 +39,7 @@ from the queue's physical in-flight command peak; ticket counts are not device d
 
 A preflush completes before checkpoint commit I/O. A FUA operation writes its
 payload, joins it, and completes an explicit queue flush before returning.
-Normal `sync` flushes payload before publishing a live checkpoint; unmount writes
+Volume `sync` flushes payload before publishing a live checkpoint; unmount writes
 a clean shutdown checkpoint. Any failed write sets the core's checkpoint error
 flag and fails synchronization instead of retrying data writes indefinitely.
 Successful page-cache writes alone do not imply durability. Synchronization trusts
@@ -58,14 +58,20 @@ Node/metadata caches, block allocation, GC and recovery remain owned by F2FS.
 The VFS worker drains dirty data and then requests a volume checkpoint every
 30 seconds. `HYPER_F2FS_SYNC_INTERVAL_SECONDS` selects 1–3600 seconds during
 negotiation. The deadline is checked once per second; completion additionally
-takes I/O time. Busy traffic does not postpone the fixed cadence. Explicit sync
-and unmount use the same ordered data-before-checkpoint fence. Worker handoff
+takes I/O time. Busy traffic does not postpone the fixed cadence. Volume sync,
+directory sync and unmount use the ordered data-before-checkpoint fence. Worker handoff
 preserves VFS ownership instead of restarting an independent service timer.
 Before negotiation, standalone core users retain the service's periodic policy.
 
 Recovery starts from a valid checkpoint and replays eligible fsync records.
-The Native sync path currently checkpoints the volume; a lightweight per-file
-fsync API is not exposed. Recovery is not an application transaction or an exact
+Native file `sync_data` and `sync_all` first drain only that file's VFS dirty
+pages. The core writes its recovery nodes, with a preflush before the final fsync
+marker and a device fence after that marker. Both modes include the inode and
+metadata needed to recover contents and size; data-only mode may also persist
+timestamps. Namespace dependencies, non-regular files, multiple links, disabled
+roll-forward or insufficient recovery space require a checkpoint instead.
+File sync does not reset or satisfy the periodic volume-checkpoint deadline.
+Recovery is not an application transaction or an exact
 snapshot rollback: unsynchronized changes may be lost or partly survive. Failed
 replay or checkpoint I/O prevents a successful mount/sync. An empty replay list
 is distinct from an inode lookup failure. Failed mount teardown joins writers
@@ -79,7 +85,8 @@ The pressure threshold is 2,048 pages (8 MiB), counting dirty data, directory,
 node and metadata pages together with pages whose writeback has not completed.
 At pressure, the upstream background writer retires a bounded batch before
 admitting more data. Waiting for device writes does not force an extra flush or
-checkpoint; explicit sync and the periodic timer retain those responsibilities. This is not a hard total-memory quota: inode, directory and metadata
+checkpoint; file sync adds a recovery fence, while volume sync and the periodic
+timer retain checkpoint responsibility. This is not a hard total-memory quota: inode, directory and metadata
 caches have additional costs. The worker retains the ordinary
 128 MiB committed-page ceiling and allows 1,024 mappings/objects for its heap
 regions and staging pools. Exceeding those quotas currently fails the process. Reads do not export physical extents because that
@@ -167,6 +174,10 @@ python3 svc/fs-f2fs/host.py \
 The formatter exclusively creates a new image; it never overwrites an existing
 file. The host test exercises real media algorithms, including dirty reads,
 checkpoint/remount, overwrite, truncate/regrow, sparse data and directory paging.
+File-sync tests model a volatile device cache and power loss, verify checkpoint-free
+recovery (including size and repeated sync), namespace fallback, and failures at
+node writes, preflush and the final commit fence. The marker must be submitted
+only after all preceding recovery nodes have crossed a successful flush.
 
 Enable `SYSTEM_APP_FS_F2FS_SYSTEM` in an alternate product configuration to deploy
 `/svc/fs-f2fs`. Both mount managers recognize `f2fs`, but bootstrap never links
@@ -175,7 +186,7 @@ from the workspace root. The optional `io-statistics` feature reports queue coun
 unmount for test evidence.
 
 `tests/app/f2fs-smoke` is a system-test application using only ordinary file
-interfaces. Its `write ROOT`, `verify ROOT` and `writeback ROOT` modes exercise
+interfaces. Its write/verify, fsync-write/fsync-verify and writeback modes exercise
 the real worker through Native VFS. It does not link the filesystem core.
 `tests/qemu/verify-f2fs.py` runs these workloads in separate QEMU instances,
 including a 12 MiB background-writeback workload and explicit unmounts.

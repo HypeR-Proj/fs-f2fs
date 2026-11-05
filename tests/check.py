@@ -25,3 +25,6 @@ subprocess.run([sys.executable, str(component / 'tests/pressure.py'),
 
 subprocess.run([sys.executable, str(component / "tests/vfs_writeback.py"),
                 str(output / "libhyper-f2fs.so")], check=True)
+
+subprocess.run([sys.executable, str(component / "tests/file_sync.py"),
+                str(output / "libhyper-f2fs.so")], check=True)

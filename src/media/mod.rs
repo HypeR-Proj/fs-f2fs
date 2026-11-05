@@ -109,6 +109,18 @@ impl<D: Device> FileSystem<D> {
         // SAFETY: Exclusive public access; mount and callback owner remain live.
         status(unsafe { ffi::hyper_f2fs_sync(self.raw()?) })
     }
+    pub fn sync_file(&mut self, path: &str, data_only: bool) -> Result<(), Error> {
+        let path = path_bytes(path)?;
+        // SAFETY: Exclusive mount access; path and callback owner outlive the call.
+        status(unsafe {
+            ffi::hyper_f2fs_sync_file(
+                self.raw()?,
+                path.as_ptr().cast(),
+                path.len(),
+                data_only.into(),
+            )
+        })
+    }
     pub fn periodic_sync(&mut self) -> Result<(), Error> {
         // SAFETY: Exclusive mount access and callback ownership span the entire pass.
         status(unsafe { ffi::hyper_f2fs_sync_if_dirty(self.raw()?) })

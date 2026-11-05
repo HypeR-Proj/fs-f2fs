@@ -589,7 +589,9 @@ pgoff_t NodeManager::FsyncNodePages(nid_t ino) {
     }
     if (is_last_dnode) {
       node_page->SetFsyncMark(true);
-      node_page->SetSync();
+      // Publish the recovery boundary only after preceding data/nodes reach
+      // the device's persistence domain, then fence the marker itself.
+      node_page->SetCommit();
     }
     return ZX_OK;
   };

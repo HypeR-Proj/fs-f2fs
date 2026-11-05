@@ -590,44 +590,48 @@ bool VnodeF2fs::NeedToLogInode() const {
 }
 
 zx_status_t VnodeF2fs::SyncFile(bool datasync) {
+  // Serialize the checkpoint decision and recovery commit with GC and metadata
+  // writeback. The Native worker already serializes public mount operations.
+  std::lock_guard lock(f2fs::GetGlobalLock());
   if (superblock_info_.TestCpFlags(CpFlag::kCpErrorFlag)) {
-    return ZX_ERR_BAD_STATE;
+    return ZX_ERR_IO;
   }
-
-  if (!IsDirty()) {
-    return ZX_OK;
-  }
+  // Directory dependencies and low recovery space still require a checkpoint.
+  // Its data drain must cover every vnode before committing shared metadata.
   if (fs_->GetSegmentManager().HasNotEnoughFreeSecs(0, GetDirtyPageCount()) || NeedToCheckpoint()) {
-    // Disallow filesystem modifications
-    std::lock_guard lock(f2fs::GetGlobalLock());
-    do {
-      uint32_t to_write = std::min(kDefaultBlocksPerSegment, GetDirtyPageCount());
-      fs()->AllocateFreeSections(to_write);
-      WritebackOperation op = {.to_write = to_write};
-      Writeback(op);
-    } while (GetDirtyPageCount());
-    zx_status_t ret = fs()->WriteCheckpointUnsafe(false);
+    zx_status_t ret = fs()->SyncFsUnsafe(false);
     if (ret == ZX_OK) {
       ClearFlag(InodeInfoFlag::kNeedCp);
     }
     return ret;
   }
-  fs::SharedLock lock(f2fs::GetGlobalLock());
-  // Disallow modifications to this file
+  if (!IsDirty()) {
+    return ZX_OK;
+  }
   std::lock_guard file_lock(mutex_);
-  WritebackOperation op;
+  WritebackOperation op = {.bSync = true};
   Writeback(op);
-  if (!datasync || NeedToLogInode()) {
-    LockedPage page;
-    if (zx_status_t ret = fs()->GetNodeManager().GetNodePage(ino_, &page); ret != ZX_OK) {
-      return ret;
-    }
-    UpdateInodePageUnsafe(page, true);
+  if (superblock_info_.TestCpFlags(CpFlag::kCpErrorFlag)) {
+    return ZX_ERR_IO;
   }
-  fs()->GetNodeManager().FsyncNodePages(Ino());
-  if (!GetDirtyPageCount()) {
-    ClearDirty();
+  if (GetDirtyPageCount()) {
+    return ZX_ERR_NO_SPACE;
   }
+  // Always log the inode, including datasync: earlier bounded writeback may
+  // have cleaned its node page, but recovery still needs a final fsync marker.
+  // Persisting additional timestamps is permitted by the data-only contract.
+  (void)datasync;
+  LockedPage page;
+  if (zx_status_t ret = fs()->GetNodeManager().GetNodePage(ino_, &page); ret != ZX_OK) {
+    return ret;
+  }
+  UpdateInodePageUnsafe(page, true);
+  page.reset();
+  if (!fs()->GetNodeManager().FsyncNodePages(Ino()) ||
+      superblock_info_.TestCpFlags(CpFlag::kCpErrorFlag)) {
+    return ZX_ERR_IO;
+  }
+  ClearDirty();
   return ZX_OK;
 }
 

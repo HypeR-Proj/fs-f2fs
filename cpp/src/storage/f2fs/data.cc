@@ -185,7 +185,13 @@ block_t VnodeF2fs::GetBlockAddr(LockedPage &page) {
   ZX_DEBUG_ASSERT(page->GetIndex() == nid);
 
   NodeInfo ni;
-  fs_->GetNodeManager().GetNodeInfo(nid, ni);
+  if (fs_->GetNodeManager().GetNodeInfo(nid, ni) != ZX_OK) {
+    // No address may be allocated from an incomplete NAT lookup. Keep the
+    // page owned and make every following recovery/checkpoint fence fail.
+    page.SetDirty();
+    superblock_info_.SetCpFlags(CpFlag::kCpErrorFlag);
+    return kNullAddr;
+  }
   block_t old_addr = ni.blk_addr;
 
   // This page is already truncated
@@ -246,7 +252,13 @@ block_t VnodeF2fs::GetBlockAddrOnDataSegment(LockedPage &page) {
   // Allocate a new addr
   NodeInfo ni;
   nid_t nid = (*dnode_page).GetPage<NodePage>().NidOfNode();
-  fs_->GetNodeManager().GetNodeInfo(nid, ni);
+  if (fs_->GetNodeManager().GetNodeInfo(nid, ni) != ZX_OK) {
+    // No address may be allocated from an incomplete NAT lookup. Keep the
+    // page owned and make every following recovery/checkpoint fence fail.
+    page.SetDirty();
+    superblock_info_.SetCpFlags(CpFlag::kCpErrorFlag);
+    return kNullAddr;
+  }
 
   Summary sum;
   SetSummary(&sum, nid, ofs_in_dnode, ni.version);

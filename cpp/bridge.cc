@@ -85,6 +85,16 @@ extern "C" int32_t hyper_f2fs_sync(void *context)
 	return static_cast<Mounted *>(context)->fs->SyncFs(false);
 }
 
+extern "C" int32_t hyper_f2fs_sync_file(void *context, const char *path, size_t length,
+                                       uint8_t data_only)
+{
+    if (data_only > 1) return ZX_ERR_INVALID_ARGS;
+    auto &mount = *static_cast<Mounted *>(context);
+    auto vnode = Lookup(mount, std::string_view(path, length));
+    if (vnode.is_error()) return vnode.error_value();
+    return (*vnode)->SyncFile(data_only != 0);
+}
+
 extern "C" int32_t hyper_f2fs_sync_if_dirty(void *context)
 {
 	return static_cast<Mounted *>(context)->fs->SyncFsIfDirty();
