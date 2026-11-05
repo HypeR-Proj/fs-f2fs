@@ -51,6 +51,10 @@ The kernel negotiates VFS-owned file-data writeback at mount. Accepted writes
 populate the common VFS page cache, so reads through independent opens see dirty
 bytes without another filesystem RPC. VFS batches adjacent pages (up to 512 KiB)
 and bounds dirty ownership to 8 MiB per mount within its common cache budget.
+At 6 MiB, background data drain starts and continues toward 4 MiB, releasing the
+volume gate between completed batches. This pressure drain is separate from the
+periodic checkpoint. Foreground writes also release that gate between bounded
+chunks while preserving same-file ordering.
 F2FS retires each received data batch and evicts clean temporary copies before
 replying. This does not issue a checkpoint or device-cache flush per batch.
 Node/metadata caches, block allocation, GC and recovery remain owned by F2FS.
@@ -59,7 +63,10 @@ The VFS worker drains dirty data and then requests a volume checkpoint every
 30 seconds. `HYPER_F2FS_SYNC_INTERVAL_SECONDS` selects 1–3600 seconds during
 negotiation. The deadline is checked once per second; completion additionally
 takes I/O time. Busy traffic does not postpone the fixed cadence. Volume sync,
-directory sync and unmount use the ordered data-before-checkpoint fence. Worker handoff
+directory sync and unmount use the ordered data-before-checkpoint fence.
+Native callers can explicitly select the containing volume through
+`FILE_SYNC_VOLUME` on a writable file; ordinary file sync retains the recovery-log
+path described below. Worker handoff
 preserves VFS ownership instead of restarting an independent service timer.
 Before negotiation, standalone core users retain the service's periodic policy.
 
