@@ -129,6 +129,11 @@ impl Volume for Mounted {
     fn resize(&mut self, p: &str, n: u64) -> Result<(), Error> {
         self.0.resize(p, n).map_err(map_error)
     }
+    fn sync_file(&mut self, path: &str, mode: protocol::SyncMode) -> Result<(), Error> {
+        self.0
+            .sync_file(path, mode == protocol::SyncMode::Data)
+            .map_err(map_error)
+    }
     fn sync(&mut self) -> Result<(), Error> {
         self.0.sync().map_err(map_error)
     }

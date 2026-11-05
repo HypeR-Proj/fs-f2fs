@@ -5,6 +5,7 @@
 // These entry points are absent from the Native worker and its FFI header.
 #include "src/storage/f2fs/segment.h"
 #include "src/storage/f2fs/node.h"
+#include "src/storage/f2fs/node_page.h"
 #include "src/storage/f2fs/writeback.h"
 #include <chrono>
 #include <thread>
@@ -31,14 +32,21 @@ extern "C" int32_t hyper_f2fs_test_node(void *context, uint32_t nid, bool batch)
   return nodes.GetNodePage(nid, &page);
 }
 
+// Exercise address-allocation failure after the page has entered writeback.
+extern "C" int32_t hyper_f2fs_test_writeback_nat(void *context, uint32_t nid) {
+  auto &fs = *static_cast<Mounted *>(context)->fs;
+  std::lock_guard lock(f2fs::GetGlobalLock());
+  auto &nodes = fs.GetNodeVnode();
+  f2fs::LockedPage page;
+  if (auto status = nodes.GrabLockedPage(nid, &page); status != ZX_OK) return status;
+  page.GetPage<f2fs::NodePage>().FillNodeFooter(nid, nid, 0);
+  page.SetDirty();
+  if (nodes.GetBlockAddr(page) != f2fs::kNullAddr || !page->IsDirty()) return ZX_ERR_BAD_STATE;
+  return fs.GetSuperblockInfo().TestCpFlags(f2fs::CpFlag::kCpErrorFlag) ? ZX_ERR_IO : ZX_ERR_BAD_STATE;
+}
+
 extern "C" int32_t hyper_f2fs_test_fsync(void *context, const char *path, size_t length) {
-  auto &mount = *static_cast<Mounted *>(context);
-  auto vnode = Lookup(mount, std::string_view(path, length));
-  if (vnode.is_error()) return vnode.error_value();
-  auto status = (*vnode)->SyncFile(false);
-  mount.fs->GetWriter().Sync();
-  if (mount.fs->GetSuperblockInfo().TestCpFlags(f2fs::CpFlag::kCpErrorFlag)) return ZX_ERR_IO;
-  return status;
+  return hyper_f2fs_sync_file(context, path, length, 0);
 }
 
 extern "C" void hyper_f2fs_test_pending_writer(void *context) {

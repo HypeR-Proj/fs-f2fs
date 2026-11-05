@@ -29,6 +29,7 @@ class FaultImage(api.Image):
         self.library.hyper_f2fs_test_state.argtypes = [c.c_void_p, c.c_uint]
         self.library.hyper_f2fs_test_state.restype = c.c_uint64
         self.library.hyper_f2fs_test_pending_writer.argtypes = [c.c_void_p]
+        self.library.hyper_f2fs_test_writeback_nat.argtypes = [c.c_void_p, c.c_uint32]
         self.library.hyper_f2fs_test_node.argtypes = [c.c_void_p, c.c_uint32, c.c_bool]
         self.library.hyper_f2fs_test_fsync.argtypes = [c.c_void_p, c.c_char_p, c.c_size_t]
         self.library.hyper_f2fs_sync_if_dirty.argtypes = [c.c_void_p]
@@ -117,7 +118,7 @@ def exercise(library, fault):
                 if image.counts['flush'] <= before:
                     raise RuntimeError('explicit sync lost its flush boundary')
                 return
-            if fault == 'nat-read':
+            if fault in ('nat-read', 'writeback-nat-read'):
                 # A distant unused nid avoids both the NAT journal and the free-nid
                 # scan cache. Its never-written NAT block uses the first copy.
                 nid = 100000
@@ -125,6 +126,14 @@ def exercise(library, fault):
                 nat_index = nid // 455
                 image.read_fault = (nat_base + nat_index // blocks * blocks * 2
                                     + nat_index % blocks) * 4096
+                if fault == 'writeback-nat-read':
+                    if fs.hyper_f2fs_test_writeback_nat(mounted, nid) != -40:
+                        raise RuntimeError('failed NAT lookup allocated an address or lost its dirty page')
+                    if fs.hyper_f2fs_sync(mounted) == 0:
+                        raise RuntimeError('NAT writeback failure was hidden by volume sync')
+                    if image.injected == 0:
+                        raise RuntimeError('NAT writeback fault was not reached')
+                    return
                 for batch in (False, True):
                     if fs.hyper_f2fs_test_node(mounted, nid, batch) != -40:
                         raise RuntimeError('NAT read error was converted to an absent node')
@@ -210,7 +219,7 @@ if __name__ == '__main__':
         exercise(sys.argv[1], sys.argv[2])
     else:
         for fault in ['checkpoint', 'scan-read', 'roll-forward', 'replay-checkpoint',
-                      'missing-inode', 'writer-shutdown', 'nat-read', 'periodic-clean',
+                      'missing-inode', 'writer-shutdown', 'nat-read', 'writeback-nat-read', 'periodic-clean',
                       'replay-partial-write', 'replay-preflush', 'replay-commit-flush']:
             subprocess.run([sys.executable, __file__, sys.argv[1], fault], check=True, timeout=45)
             print(f'F2FS {fault}: PASS', flush=True)

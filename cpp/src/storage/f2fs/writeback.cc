@@ -79,6 +79,13 @@ std::vector<storage::BufferedOperation> Writer::BuildBufferedOperation(OwnedStor
   NotifyWriteback notifier;
   while (!pages.is_empty()) {
     auto page = pages.pop_front();
+    // A recovery/checkpoint marker starts its own batch. Its preflush must
+    // cover every preceding node, including nodes collected in this task.
+    // Flushing before a batch that also contains those nodes is too early.
+    if (page->IsCommit() && !to_submit.is_empty()) {
+      pages.push_front(std::move(page));
+      return builder.TakeOperations();
+    }
     zx::result operation = PageToOperation(buffer, *page, needs_preflush);
     if (operation.is_error()) {
       if (operation.error_value() == ZX_ERR_UNAVAILABLE) {
