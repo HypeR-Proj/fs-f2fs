@@ -6,7 +6,7 @@ use hyper_filesystem::{
     protocol::{self, DirectoryCursor, Entry, Error},
 };
 use hyper_fs_service::Volume;
-use hyper_os::block::{BlockQueue, NativeBlock, QueueConfig};
+use hyper_os::block::BlockQueue;
 struct Mounted(FileSystem<BlockDevice>, std::time::Duration);
 impl Volume for Mounted {
     fn writeback_policy(&self) -> hyper_fs_service::WritebackPolicy {
@@ -176,19 +176,12 @@ pub(super) fn run() -> Result<(), String> {
     if std::env::args().nth(2).as_deref() != Some("rw") {
         return Err("experimental F2FS requires rw; read-only recovery is not implemented".into());
     }
-    let (block, adopted) = if std::env::args().nth(3).as_deref() == Some("--adopt") {
-        let (b, s) = hyper_fs_service::adopt(&mut startup)?;
-        (b, Some(s))
+    let adopted = if std::env::args().nth(3).as_deref() == Some("--adopt") {
+        Some(hyper_fs_service::adopt(&mut startup)?)
     } else {
-        (
-            NativeBlock::from_handle(
-                startup
-                    .take(hyper_service::filesystem::BLOCK)
-                    .map_err(show)?,
-            ),
-            None,
-        )
+        None
     };
+
     let queue = match adopted.as_ref() {
         Some(state) => BlockQueue::from_handle(
             state
@@ -197,10 +190,13 @@ pub(super) fn run() -> Result<(), String> {
                 .duplicate(hyper_service::filesystem::QUEUE_RIGHTS)
                 .map_err(show)?,
         ),
-        None => block.create_queue(QueueConfig::default()).map_err(show)?,
+        None => BlockQueue::from_handle(
+            startup
+                .take(hyper_service::filesystem::QUEUE)
+                .map_err(show)?,
+        ),
     };
-    let device = BlockDevice::with_queue(
-        block,
+    let device = BlockDevice::from_queue(
         sectors,
         BlockQueue::from_handle(
             queue
@@ -215,13 +211,9 @@ pub(super) fn run() -> Result<(), String> {
         Err(std::env::VarError::NotPresent) => 30,
         Err(error) => return Err(show(error)),
     };
-    if !(1..=3600).contains(&seconds) {
-        return Err("sync interval must be 1..=3600 seconds".into());
-    }
-    let mut volume = Mounted(
-        FileSystem::mount(device).map_err(show)?,
-        std::time::Duration::from_secs(seconds),
-    );
+    let interval = std::time::Duration::from_secs(seconds);
+    hyper_fs_service::WritebackPolicy::Periodic(interval).validate()?;
+    let mut volume = Mounted(FileSystem::mount(device).map_err(show)?, interval);
     let completion = match adopted {
         Some(state) => hyper_fs_service::resume(state, &mut volume)?,
         None => hyper_fs_service::serve(&mut startup, &mut volume, queue)?,
@@ -236,5 +228,6 @@ pub(super) fn run() -> Result<(), String> {
             info.submitted_ranges, info.dispatched_commands, info.merged_ranges, info.peak_inflight
         );
     }
-    hyper_fs_service::return_block(completion, device.into_block().map_err(show)?)
+    device.close().map_err(show)?;
+    hyper_fs_service::finish(completion)
 }

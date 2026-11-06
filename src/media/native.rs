@@ -19,7 +19,7 @@ pub struct Statistics {
     pub peak_reads: usize,
 }
 pub struct BlockDevice {
-    block: NativeBlock,
+    block: Option<NativeBlock>,
     queue: Option<BlockQueue>,
     blocks: u64,
     pending: VecDeque<(Ticket, usize)>,
@@ -31,14 +31,16 @@ impl BlockDevice {
             return Err(INVALID);
         }
         let queue = block.create_queue(QueueConfig::default()).map_err(error)?;
-        Self::with_queue(block, sectors, queue)
+        let mut device = Self::from_queue(sectors, queue)?;
+        device.block = Some(block);
+        Ok(device)
     }
-    pub fn with_queue(block: NativeBlock, sectors: u64, queue: BlockQueue) -> Result<Self, Error> {
+    pub fn from_queue(sectors: u64, queue: BlockQueue) -> Result<Self, Error> {
         if !sectors.is_multiple_of(8) {
             return Err(INVALID);
         }
         Ok(Self {
-            block,
+            block: None,
             queue: Some(queue),
             blocks: sectors / 8,
             pending: VecDeque::with_capacity(OUTSTANDING),
@@ -55,7 +57,13 @@ impl BlockDevice {
     pub fn into_block(mut self) -> Result<NativeBlock, Error> {
         self.drain()?;
         drop(self.queue.take());
-        Ok(self.block)
+        self.block.take().ok_or(INVALID)
+    }
+    /// Drain adapter-owned writes before acknowledging worker shutdown.
+    pub fn close(mut self) -> Result<(), Error> {
+        self.drain()?;
+        drop(self.queue.take());
+        Ok(())
     }
     fn queue(&self) -> Result<&BlockQueue, Error> {
         self.queue.as_ref().ok_or(IO)
