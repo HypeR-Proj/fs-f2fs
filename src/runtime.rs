@@ -8,7 +8,36 @@ use hyper_filesystem::{
 use hyper_fs_service::Volume;
 use hyper_os::block::BlockQueue;
 struct Mounted(FileSystem<BlockDevice>, std::time::Duration);
+struct WriteReceipt(Option<crate::media::WriteReceipt>);
+impl hyper_fs_service::WriteCompletion for WriteReceipt {
+    fn wait(mut self: Box<Self>) -> Result<(), Error> {
+        self.0
+            .take()
+            .ok_or(Error::Corrupt)?
+            .wait()
+            .map_err(map_error)
+    }
+}
 impl Volume for Mounted {
+    fn capabilities(&self) -> protocol::Capabilities {
+        protocol::Capabilities::ASYNC_WRITEBACK
+    }
+    fn submit_writeback(
+        &mut self,
+        p: &str,
+        o: u64,
+        input: &[u8],
+        _token: u64,
+    ) -> Result<hyper_fs_service::SubmittedWrite, Error> {
+        // Reserve the public receipt wrapper before the media core mutates data.
+        let mut completion = crate::media::try_box(WriteReceipt(None)).map_err(map_error)?;
+        let (accepted, receipt) = self.0.submit_writeback(p, o, input).map_err(map_error)?;
+        completion.0 = Some(receipt);
+        Ok(hyper_fs_service::SubmittedWrite {
+            accepted,
+            completion,
+        })
+    }
     fn writeback_policy(&self) -> hyper_fs_service::WritebackPolicy {
         hyper_fs_service::WritebackPolicy::Periodic(self.1)
     }

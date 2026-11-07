@@ -16,7 +16,8 @@ class Io(c.Structure):
 RUN = c.CFUNCTYPE(c.c_int32, c.c_void_p, c.POINTER(Io), c.c_size_t)
 class Device(c.Structure):
     _fields_ = [('context', c.c_void_p), ('blocks', c.c_uint64), ('read', READ), ('write', READ),
-                ('flush', FLUSH), ('uuid', c.c_uint8 * 16), ('run', RUN)]
+                ('flush', FLUSH), ('uuid', c.c_uint8 * 16), ('run', RUN),
+                ('submit', c.c_void_p), ('complete', c.c_void_p)]
 
 class Image:
     def __init__(self, library, path):

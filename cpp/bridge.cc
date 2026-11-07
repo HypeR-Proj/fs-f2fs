@@ -7,8 +7,10 @@
 #include "src/storage/f2fs/superblock_info.h"
 #include "src/storage/f2fs/dir.h"
 #include "src/storage/f2fs/mkfs.h"
+#include "src/storage/f2fs/writeback.h"
 #include <cstdarg>
 #include <cstdio>
+#include <new>
 #ifdef HYPER_F2FS_NATIVE
 extern "C" [[noreturn]] void hyper_cxx_fatal(const char *);
 
@@ -174,6 +176,61 @@ extern "C" int32_t hyper_f2fs_write(void *context, const char *path, size_t n, u
 			return ZX_ERR_NO_SPACE;
 	}
 	return status;
+}
+
+struct NativeWriteReceipt {
+	f2fs::WritebackResult result;
+	zx_status_t initial_status = ZX_OK;
+};
+
+extern "C" int32_t hyper_f2fs_submit_write(void *context, const char *path, size_t n,
+                                          uint64_t offset, const void *buffer, size_t length,
+                                          size_t *actual, void **output)
+{
+	*actual = 0;
+	*output = nullptr;
+	auto &mount = *static_cast<Mounted *>(context);
+	if (!mount.vfs_writeback || length == 0 || length > 512 * 1024)
+		return ZX_ERR_INVALID_ARGS;
+	// Receipt allocation precedes mutation. Its event is signaled by the
+	// independently progressing Writer completion owner, never by receipt wait.
+	auto receipt = std::unique_ptr<NativeWriteReceipt>(new (std::nothrow) NativeWriteReceipt);
+	if (!receipt) return ZX_ERR_NO_MEMORY;
+	auto found = Lookup(mount, {path, n});
+	if (found.is_error()) return found.error_value();
+	if (!S_ISREG((*found)->GetMode())) return ZX_ERR_NOT_FILE;
+	auto *file = static_cast<f2fs::File *>((*found).get());
+	receipt->initial_status = file->WriteNative(buffer, length, offset, actual);
+	if (*actual == 0) return receipt->initial_status != ZX_OK ? receipt->initial_status : ZX_ERR_IO;
+	{
+		fs::SharedLock global(f2fs::GetGlobalLock());
+		f2fs::WritebackOperation operation = {
+			.start = offset / f2fs::kBlockSize,
+			.end = (offset + *actual + f2fs::kBlockSize - 1) / f2fs::kBlockSize,
+			.bReclaim = true,
+		};
+		// Writeback synchronously selects and marks the exact pages before
+		// acceptance; its forced submission also handles a short final batch.
+		file->Writeback(operation, &receipt->result);
+		if (mount.fs->GetSuperblockInfo().TestCpFlags(f2fs::CpFlag::kCpErrorFlag) &&
+		    receipt->initial_status == ZX_OK)
+			receipt->initial_status = ZX_ERR_IO;
+		if (file->GetDirtyPageCount() != 0 && receipt->initial_status == ZX_OK)
+			receipt->initial_status = ZX_ERR_NO_SPACE;
+		// An accepted prefix whose data preparation failed cannot later be
+		// hidden by a successful checkpoint, even if its submitted blocks finish.
+		if (receipt->initial_status != ZX_OK)
+			mount.fs->GetSuperblockInfo().SetCpFlags(f2fs::CpFlag::kCpErrorFlag);
+	}
+	*output = receipt.release();
+	return ZX_OK;
+}
+
+extern "C" int32_t hyper_f2fs_wait_write(void *context)
+{
+	auto receipt = std::unique_ptr<NativeWriteReceipt>(static_cast<NativeWriteReceipt *>(context));
+	sync_completion_wait(&receipt->result.done, ZX_TIME_INFINITE);
+	return receipt->initial_status != ZX_OK ? receipt->initial_status : receipt->result.status;
 }
 
 const char *zx::result<>::status_string() const

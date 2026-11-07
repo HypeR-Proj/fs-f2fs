@@ -23,6 +23,10 @@
 #include "src/storage/f2fs/writeback.h"
 #include "src/storage/lib/vfs/cpp/shared_mutex.h"
 
+#ifndef HYPER_F2FS_NATIVE
+extern "C" void hyper_f2fs_test_prepared_writeback();
+#endif
+
 namespace f2fs {
 
 VnodeF2fs::VnodeF2fs(F2fs* fs, ino_t ino, umode_t mode, LockedPage node_page)
@@ -1060,14 +1064,11 @@ zx::result<LockedPage> VnodeF2fs::NewInodePage() {
   return zx::ok(std::move(*page));
 }
 
-// TODO: Consider using a global lock as below
-// if (!IsDir())
-//   mutex_lock(&superblock_info->writepages);
-// Writeback()
-// if (!IsDir())
-//   mutex_unlock(&superblock_info->writepages);
-// fs()->RemoveDirtyDirInode(this);
-pgoff_t VnodeF2fs::Writeback(WritebackOperation& operation) {
+pgoff_t VnodeF2fs::Writeback(WritebackOperation& operation, WritebackResult* result) {
+  // Shared global locking permits concurrent pressure writeback. Once another
+  // writer clears Dirty, its local PageList must reach Writer before a receipt
+  // can conclude that this vnode has no earlier data left to submit.
+  std::unique_lock prepare(writeback_prepare_mutex_);
   pgoff_t nwritten = 0;
   std::vector<fbl::RefPtr<Page>> pages = file_cache_->FindDirtyPages(operation);
   pgoff_t last_key = pages.size() ? pages.back()->GetKey() : operation.end;
@@ -1088,16 +1089,20 @@ pgoff_t VnodeF2fs::Writeback(WritebackOperation& operation) {
       operation.page_cb(locked_page.CopyRefPtr(), locked_page->GetKey() == last_key);
     }
     pages_to_disk.push_back(locked_page.release());
+#ifndef HYPER_F2FS_NATIVE
+    hyper_f2fs_test_prepared_writeback();
+#endif
     ++nwritten;
 
     if (!(nwritten % kDefaultBlocksPerSegment)) {
       fs()->GetWriter().ScheduleWriteBlocks(nullptr, std::move(pages_to_disk));
     }
   }
-  if (!pages_to_disk.is_empty() || operation.bSync) {
+  if (!pages_to_disk.is_empty() || operation.bSync || result) {
     sync_completion_t completion;
     fs()->GetWriter().ScheduleWriteBlocks(operation.bSync ? &completion : nullptr,
-                                          std::move(pages_to_disk), operation.bSync);
+                                          std::move(pages_to_disk), operation.bSync || result != nullptr, result);
+    prepare.unlock();
     if (operation.bSync) {
       sync_completion_wait(&completion, ZX_TIME_INFINITE);
     }

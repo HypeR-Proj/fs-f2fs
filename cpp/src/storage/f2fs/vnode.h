@@ -18,6 +18,7 @@
 #include "src/storage/lib/vfs/cpp/vnode.h"
 
 namespace f2fs {
+struct WritebackResult;
 constexpr uint32_t kNullIno = std::numeric_limits<uint32_t>::max();
 // The maximum number of blocks that an append can make dirty.
 // (inode + double indirect + indirect + dnode + data)
@@ -160,7 +161,7 @@ class VnodeF2fs : public fs::Vnode,
   // It reserves space from |offset| to |offset| + |len| before dirtying the corresponding pages.
   zx::result<std::vector<LockedPage>> WriteBegin(const size_t offset, const size_t len)
       __TA_REQUIRES_SHARED(f2fs::GetGlobalLock()) __TA_REQUIRES(mutex_);
-  pgoff_t Writeback(WritebackOperation& operation) __TA_REQUIRES_SHARED(f2fs::GetGlobalLock());
+  pgoff_t Writeback(WritebackOperation& operation, WritebackResult* result = nullptr) __TA_REQUIRES_SHARED(f2fs::GetGlobalLock());
 
   // The maximum depth is four.
   // Offset[0] indicates inode offset.
@@ -431,6 +432,9 @@ class VnodeF2fs : public fs::Vnode,
   uint64_t current_depth_ __TA_GUARDED(mutex_) = 1;  // use only in directory structure
   std::unique_ptr<Timestamps> time_ __TA_GUARDED(mutex_);
 
+  // Serializes dirty-page selection through Writer enqueue, including a
+  // pressure writer's local PageList. Receipt markers cannot overtake it.
+  std::mutex writeback_prepare_mutex_;
   std::mutex ref_mutex_;
   std::atomic<block_t> dirty_pages_ = 0;  // # of dirty dentry/data pages
   std::atomic<ino_t> parent_ino_ = kNullIno;

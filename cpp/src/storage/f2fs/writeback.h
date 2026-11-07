@@ -6,6 +6,7 @@
 #define SRC_STORAGE_F2FS_WRITEBACK_H_
 
 #include <lib/fpromise/sequencer.h>
+#include <condition_variable>
 
 #include "src/storage/f2fs/common.h"
 #include "src/storage/f2fs/file_cache.h"
@@ -13,6 +14,13 @@
 #include "src/storage/lib/vfs/cpp/transaction/buffered_operations_builder.h"
 
 namespace f2fs {
+
+// Receipt storage is reserved before a Native write mutates file data. The
+// final completion task publishes status before signaling done.
+struct WritebackResult {
+  sync_completion_t done;
+  zx_status_t status = ZX_OK;
+};
 
 class StorageBufferPool;
 class OwnedStorageBuffer;
@@ -42,7 +50,7 @@ class Writer final {
   // pages out to backing storage. Then, it schedules the task on |executor_|. All tasks execute
   // in order they are scheduled by |sequencer_|.
   void ScheduleWriteBlocks(sync_completion_t *completion = nullptr, PageList pages = {},
-                           bool flush = true) __TA_EXCLUDES(mutex_);
+                           bool flush = true, WritebackResult* result = nullptr) __TA_EXCLUDES(mutex_);
 
   // It returns after waiting for the storage operation for all pending pages to complete.
   void Sync();
@@ -56,7 +64,14 @@ class Writer final {
   // the storage driver server to write the storage operations out to backing storage. On the
   // completion of the storage operations, the task notifies the waiters for writeback pages, and
   // signals |completion| if it is not null. See below for the semantics of |needs_preflush|.
-  fpromise::promise<> GetTaskForWriteIO(PageList to_submit, sync_completion_t *completion);
+  fpromise::promise<> GetTaskForWriteIO(PageList to_submit, sync_completion_t *completion,
+                                       WritebackResult* result);
+  void FinishPages(PageList pages, zx_status_t status);
+  void DrainCompletions();
+  size_t ReserveCompletion(bool data);
+  void PublishCompletion(size_t slot, PageList pages, void* token, zx_status_t status,
+                         sync_completion_t* completion = nullptr, WritebackResult* result = nullptr);
+  void CompleteLoop();
   std::vector<storage::BufferedOperation> BuildBufferedOperation(OwnedStorageBuffer &buffer,
                                                                  PageList &pages,
                                                                  PageList &to_submit,
@@ -78,6 +93,29 @@ class Writer final {
   fs::BackgroundExecutor executor_;
   // An executor for tasks that allocate blocks for dirty pages.
   fs::BackgroundExecutor writeback_executor_;
+  // Only the ordered submitter increments inflight_; the independent completion
+  // owner decrements it after clearing page writeback and publishing errors.
+  struct CompletionTask {
+    PageList pages;
+    void* token = nullptr;
+    zx_status_t status = ZX_OK;
+    sync_completion_t* completion = nullptr;
+    WritebackResult* result = nullptr;
+    bool data = false;
+    bool ready = false;
+  };
+  // All retirement storage exists before mount publication. The sole ordered
+  // submitter reserves a slot before physical submission and publishes by move.
+  std::array<CompletionTask, 4> completions_;
+  std::mutex completion_mutex_;
+  std::condition_variable completion_cv_;
+  size_t inflight_ = 0;
+  zx_status_t io_status_ = ZX_OK;
+  size_t completion_head_ = 0;
+  size_t completion_tail_ = 0;
+  size_t completion_count_ = 0;
+  bool completion_stop_ = false;
+  std::thread completion_thread_;
   bool shutdown_ = false;
 };
 

@@ -17,6 +17,8 @@ pub(super) struct Device {
     pub flush: unsafe extern "C" fn(*mut c_void) -> i32,
     pub uuid: [u8; 16],
     pub run: unsafe extern "C" fn(*mut c_void, *const Io, usize) -> i32,
+    pub submit: unsafe extern "C" fn(*mut c_void, *const Io, usize, *mut *mut c_void) -> i32,
+    pub complete: unsafe extern "C" fn(*mut c_void) -> i32,
 }
 #[repr(C)]
 #[derive(Default)]
@@ -46,6 +48,17 @@ unsafe extern "C" {
         l: usize,
         a: *mut usize,
     ) -> i32;
+    pub fn hyper_f2fs_submit_write(
+        m: *mut c_void,
+        p: *const c_char,
+        n: usize,
+        o: u64,
+        b: *const u8,
+        l: usize,
+        a: *mut usize,
+        receipt: *mut *mut c_void,
+    ) -> i32;
+    pub fn hyper_f2fs_wait_write(receipt: *mut c_void) -> i32;
     pub fn hyper_f2fs_read(
         m: *mut c_void,
         p: *const c_char,

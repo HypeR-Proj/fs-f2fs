@@ -39,6 +39,16 @@ class BcacheMapper {
   }
 
   zx_status_t RunRequests(const std::vector<storage::BufferedOperation>& ops) {
+    return Requests(ops, nullptr);
+  }
+  zx_status_t SubmitRequests(const std::vector<storage::BufferedOperation>& ops, void** token) {
+    *token = nullptr;
+    return Requests(ops, token);
+  }
+  zx_status_t CompleteRequests(void* token) { return token ? cb_.complete(token) : ZX_OK; }
+
+ private:
+  zx_status_t Requests(const std::vector<storage::BufferedOperation>& ops, void** token) {
     std::vector<HyperF2fsIo> requests;
     requests.reserve(ops.size());
     for (const auto& b : ops) {
@@ -63,6 +73,8 @@ class BcacheMapper {
                           static_cast<uint8_t*>(b.data) + op.vmo_offset * 4096, op.length * 4096,
                           kind});
     }
+    if (token && cb_.submit && cb_.complete)
+      return cb_.submit(cb_.context, requests.data(), requests.size(), token);
     return cb_.run(cb_.context, requests.data(), requests.size());
   }
 
