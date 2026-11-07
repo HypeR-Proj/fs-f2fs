@@ -10,6 +10,8 @@ pub(super) trait Queue {
     /// None means credits are temporarily unavailable.
     fn submit_read(&mut self, sector: u64, bytes: usize) -> Result<Option<Self::Ticket>, Error>;
     fn wait_space(&mut self, bytes: usize) -> Result<(), Error>;
+    /// Returning, including an error, retires request ownership and this borrow.
+    /// A lost wait/reap observation cannot be reported as an ordinary completion.
     fn finish_read(&mut self, ticket: Self::Ticket, output: &mut [u8]) -> Result<(), Error>;
     fn admitted(&mut self, pending: usize);
 }

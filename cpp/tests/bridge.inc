@@ -59,3 +59,64 @@ extern "C" void hyper_f2fs_test_pending_writer(void *context) {
     return fpromise::ok();
   }));
 }
+
+extern "C" int64_t hyper_f2fs_test_cached_pages(void *context, const char *path, size_t length) {
+  auto found = Lookup(*static_cast<Mounted *>(context), {path, length});
+  if (found.is_error()) return found.error_value();
+  return static_cast<int64_t>((*found)->GetFileCache().GetSize());
+}
+
+// Pause the exact dirty -> local writeback-list transition. These synchronization
+// hooks and the deliberately split preparation helpers are absent from Native.
+namespace {
+std::mutex preparation_test_mutex;
+std::condition_variable preparation_test_cv;
+bool preparation_test_armed = false;
+bool preparation_test_paused = false;
+bool preparation_test_entered = false;
+}
+extern "C" void hyper_f2fs_test_pause_preparation(bool enabled) {
+  {
+    std::lock_guard lock(preparation_test_mutex);
+    preparation_test_armed = enabled;
+    preparation_test_paused = enabled;
+    if (enabled) preparation_test_entered = false;
+  }
+  preparation_test_cv.notify_all();
+}
+extern "C" bool hyper_f2fs_test_wait_prepared() {
+  std::unique_lock lock(preparation_test_mutex);
+  return preparation_test_cv.wait_for(lock, std::chrono::seconds(5), [] {
+    return preparation_test_entered;
+  });
+}
+extern "C" void hyper_f2fs_test_prepared_writeback() {
+  std::unique_lock lock(preparation_test_mutex);
+  if (!preparation_test_armed) return;
+  preparation_test_armed = false;
+  preparation_test_entered = true;
+  preparation_test_cv.notify_all();
+  preparation_test_cv.wait(lock, [] { return !preparation_test_paused; });
+}
+extern "C" int32_t hyper_f2fs_test_dirty(void* context, const char* path, size_t length,
+                                        const void* data, size_t bytes) {
+  auto found = Lookup(*static_cast<Mounted*>(context), {path, length});
+  if (found.is_error()) return found.error_value();
+  if (!S_ISREG((*found)->GetMode())) return ZX_ERR_NOT_FILE;
+  size_t actual = 0;
+  auto status = static_cast<f2fs::File*>((*found).get())->WriteNative(data, bytes, 0, &actual);
+  return status != ZX_OK ? status : actual == bytes ? ZX_OK : ZX_ERR_IO;
+}
+extern "C" int32_t hyper_f2fs_test_snapshot(void* context, const char* path, size_t length,
+                                           void** output) {
+  *output = nullptr;
+  auto receipt = std::unique_ptr<NativeWriteReceipt>(new (std::nothrow) NativeWriteReceipt);
+  if (!receipt) return ZX_ERR_NO_MEMORY;
+  auto found = Lookup(*static_cast<Mounted*>(context), {path, length});
+  if (found.is_error()) return found.error_value();
+  fs::SharedLock global(f2fs::GetGlobalLock());
+  f2fs::WritebackOperation operation;
+  (*found)->Writeback(operation, &receipt->result);
+  *output = receipt.release();
+  return ZX_OK;
+}

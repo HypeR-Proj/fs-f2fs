@@ -23,6 +23,11 @@ struct HyperF2fsDevice {
 	int32_t (*flush)(void *);
 	uint8_t uuid[16];
 	int32_t (*run)(void *, const struct HyperF2fsIo *, size_t);
+	// Optional ordinary-write submission. Input is consumed before return; a
+	// non-null completion is owned by the caller even if submission failed.
+	int32_t (*submit)(void *, const struct HyperF2fsIo *, size_t, void **);
+	// Consumes completion without accessing the mutable device callback owner.
+	int32_t (*complete)(void *);
 };
 
 struct HyperF2fsStat {
@@ -42,6 +47,10 @@ void hyper_f2fs_destroy(void *);
 int32_t hyper_f2fs_create(void *, const char *, size_t, uint8_t);
 int32_t hyper_f2fs_read(void *, const char *, size_t, uint64_t, void *, size_t, size_t *);
 int32_t hyper_f2fs_write(void *, const char *, size_t, uint64_t, const void *, size_t, size_t *);
+int32_t hyper_f2fs_submit_write(void *, const char *, size_t, uint64_t, const void *, size_t,
+                               size_t *, void **);
+// Consumes a receipt after independently progressing writeback has retired.
+int32_t hyper_f2fs_wait_write(void *);
 int32_t hyper_f2fs_stat(void *, const char *, size_t, struct HyperF2fsStat *);
 int32_t hyper_f2fs_readdir(void *, const char *, size_t, uint64_t *, void *, size_t, size_t *);
 int32_t hyper_f2fs_remove(void *, const char *, size_t);

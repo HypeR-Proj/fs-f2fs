@@ -4,16 +4,41 @@
 //! Experimental Fuchsia F2FS media core. A mount serializes public operations;
 //! the original C++ writer may call the owned block device on a background thread.
 mod callbacks;
+#[cfg(any(target_os = "hyper", test))]
+mod completion;
 mod ffi;
 #[cfg(target_os = "hyper")]
 pub mod native;
 #[cfg(any(target_os = "hyper", test))]
 mod read_pipeline;
+#[cfg(any(target_os = "hyper", test))]
+mod write_batch;
+#[cfg(any(target_os = "hyper", test))]
+mod write_pipeline;
 use std::{ffi::c_void, marker::PhantomData, ptr::NonNull, rc::Rc, sync::Mutex};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Error(pub i32);
 pub const IO: Error = Error(-40);
+pub const NO_MEMORY: Error = Error(-4);
+
+/// Reserve an owned completion before mutation/submission, without an aborting
+/// allocation on the asynchronous retirement path.
+pub(crate) fn try_box<T>(value: T) -> Result<Box<T>, Error> {
+    let layout = std::alloc::Layout::new::<T>();
+    if layout.size() == 0 {
+        return Ok(Box::new(value));
+    }
+    // SAFETY: The nonzero layout describes T; failure is checked before writing.
+    let allocation = unsafe { std::alloc::alloc(layout) }.cast::<T>();
+    let allocation = NonNull::new(allocation).ok_or(NO_MEMORY)?;
+    // SAFETY: Fresh uniquely owned aligned storage receives exactly one T. Box
+    // uses the same global allocator/layout and takes its sole destruction duty.
+    Ok(unsafe {
+        allocation.as_ptr().write(value);
+        Box::from_raw(allocation.as_ptr())
+    })
+}
 pub const INVALID: Error = Error(-10);
 pub const CORRUPT: Error = Error(-42);
 pub const UNSUPPORTED: Error = Error(-2);
@@ -32,8 +57,30 @@ pub enum Operation<'a> {
         fua: bool,
     },
 }
+/// Owns completion independently of the mutable submitting device. The wait
+/// consumes every accepted operation, even if an earlier operation failed.
+pub trait DeviceCompletion: Send {
+    fn wait(self: Box<Self>) -> Result<(), Error>;
+}
+struct Completed(Result<(), Error>);
+impl DeviceCompletion for Completed {
+    fn wait(self: Box<Self>) -> Result<(), Error> {
+        self.0
+    }
+}
+
 pub trait Device: Send {
     fn blocks(&self) -> u64;
+    /// Consume ordinary-write input before return. The returned owner must
+    /// make progress without reacquiring this device's mutable callback lock.
+    fn submit(
+        &mut self,
+        operations: &mut [Operation<'_>],
+    ) -> Result<Box<dyn DeviceCompletion>, Error> {
+        let mut completion = try_box(Completed(Ok(())))?;
+        completion.0 = self.run(operations);
+        Ok(completion)
+    }
     fn read(&mut self, offset: u64, output: &mut [u8]) -> Result<(), Error>;
     fn write(&mut self, offset: u64, input: &[u8]) -> Result<(), Error>;
     fn flush(&mut self) -> Result<(), Error>;
@@ -67,6 +114,29 @@ pub struct Metadata {
 impl Metadata {
     pub fn directory(self) -> bool {
         self.mode & 0o170000 == 0o040000
+    }
+}
+
+/// An owned completion event; it never borrows or accesses the mutable mount.
+/// Dropping it joins independently progressing page retirement.
+pub struct WriteReceipt(Option<NonNull<c_void>>);
+// SAFETY: Only the receipt event/status crosses threads. C++ publishes status
+// before signaling; wait consumes its allocation and never invokes mount APIs.
+unsafe impl Send for WriteReceipt {}
+impl WriteReceipt {
+    pub fn wait(mut self) -> Result<(), Error> {
+        let receipt = self.0.take().ok_or(INVALID)?;
+        // SAFETY: This unique receipt remains allocated until the consuming wait.
+        status(unsafe { ffi::hyper_f2fs_wait_write(receipt.as_ptr()) })
+    }
+}
+impl Drop for WriteReceipt {
+    fn drop(&mut self) {
+        if let Some(receipt) = self.0.take() {
+            // SAFETY: The unique event is independent of mount/public-operation
+            // locks; consuming it cannot strand writeback on a blocked actor.
+            let _ = unsafe { ffi::hyper_f2fs_wait_write(receipt.as_ptr()) };
+        }
     }
 }
 
@@ -196,6 +266,35 @@ impl<D: Device> FileSystem<D> {
             return Err(CORRUPT);
         }
         Ok(actual)
+    }
+    pub fn submit_writeback(
+        &mut self,
+        path: &str,
+        offset: u64,
+        input: &[u8],
+    ) -> Result<(usize, WriteReceipt), Error> {
+        let p = path_bytes(path)?;
+        let mut actual = 0;
+        let mut raw = std::ptr::null_mut();
+        // SAFETY: C++ consumes input and selects exact pages before returning;
+        // the receipt owns only completion storage, never this input borrow.
+        status(unsafe {
+            ffi::hyper_f2fs_submit_write(
+                self.raw()?,
+                p.as_ptr().cast(),
+                p.len(),
+                offset,
+                input.as_ptr(),
+                input.len(),
+                &mut actual,
+                &mut raw,
+            )
+        })?;
+        let receipt = WriteReceipt(Some(NonNull::new(raw).ok_or(CORRUPT)?));
+        if actual == 0 || actual > input.len() {
+            return Err(CORRUPT);
+        }
+        Ok((actual, receipt))
     }
     pub fn read_directory(
         &mut self,

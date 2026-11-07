@@ -19,23 +19,46 @@ reads and writes use the core's page/node cache and block allocation routines.
 The private page backing is heap memory, not a Zircon VMO emulation service.
 
 Rust owns the device for the entire mount. Public operations require exclusive
-access. Background C++ callbacks borrow a stable mutex-protected device; teardown
-joins the executor before releasing that device. A successful `close` flushes
+access. Submission callbacks borrow a stable mutex-protected device. Owned block
+completions wait and reap independently of that mutex; teardown joins both the
+submission and completion executors before releasing the device. A successful `close` flushes
 and checkpoints; dropping an unsuccessful mount abandons it without claiming
 successful synchronization.
+The Native worker requires five threads: its service actor, runtime thread reaper,
+two F2FS executors and independent completion owner. The mount manager grants this
+bounded budget when launching F2FS; host tests do not enforce Native domain quotas.
 
 ## I/O and durability
 
 The Native adapter uses the existing `BlockQueue`, including its admission and
-backpressure rules. Each submission is at most 512 KiB, with at most four writes
-outstanding. Consecutive independent read operations also use a bounded four-ticket
+backpressure rules. Already available ordinary writes are grouped into at most
+sixteen disjoint ranges totaling 512 KiB per ticket, with at most four write
+tickets retained per submitted group. Grouping preserves input order, splits at
+overlapping ranges and never crosses read or FUA boundaries; it adds no delay to
+fill a batch. Scatter ranges reduce ticket overhead without turning disjoint disk
+ranges into one physical command. Consecutive independent read operations also use a bounded four-ticket
 pipeline. Writeback merges adjacent filesystem blocks before submission.
-The callback drains accepted reads and writes before returning, including after a
-later admission failure. A transport failure instead closes the queue: the kernel
-retains its own request storage until physical retirement, and no callback buffer
-remains borrowed. No source pointer survives a Native submission.
+Ordinary data-write submission consumes its input into kernel-owned requests and
+returns an independently owned completion. The ordered C++ submitter reuses its
+staging buffer after those copies, while a separate completion executor retires
+exact page lists and publishes errors. At most two groups of 128 pages are in
+flight through this path. Its fixed completion ring reserves a slot before physical
+submission; publication and retirement require no new task allocation. Rust ticket
+and receipt allocations are fallible and precede kernel admission. Clean temporary
+data pages are evicted after completion, preserving newer dirty/active pages. Reads and FUA operations retain their synchronous
+completion contract. Every accepted ticket is retired even after a later admission
+failure; failed queues reject further work and remain owned until their completion
+owners retire. The kernel retains physical request storage until safe retirement.
+No source pointer survives a Native submission. A wait/reap API failure does not
+prove ticket retirement: the worker emits a best-effort nonblocking critical
+report and terminates instead of dropping the ticket and potentially wedging
+credit waiters. The supervisor retains the queue and quarantines the failed volume;
+explicit failed-provider recovery revokes the queue and proves physical retirement
+before reuse. Successfully reaped device errors retain normal sticky error handling.
 The `io-statistics` build feature reports logical read/write ticket peaks separately
-from the queue's physical in-flight command peak; ticket counts are not device depth.
+from the queue's physical in-flight command peak. Write ticket accounting spans all
+accepted asynchronous groups; neither a local group limit nor aggregate ticket
+count is physical device depth.
 
 A preflush completes before checkpoint commit I/O. A FUA operation writes its
 payload, joins it, and completes an explicit queue flush before returning.
@@ -55,8 +78,14 @@ At 6 MiB, background data drain starts and continues toward 4 MiB, releasing the
 volume gate between completed batches. This pressure drain is separate from the
 periodic checkpoint. Foreground writes also release that gate between bounded
 chunks while preserving same-file ordering.
-F2FS retires each received data batch and evicts clean temporary copies before
-replying. This does not issue a checkpoint or device-cache flush per batch.
+F2FS separately advertises asynchronous writeback. Its explicit submit operation
+copies input and selects the exact page list before acknowledging acceptance; an
+owned receipt reports completion later. Per-vnode preparation/enqueue serialization
+prevents that receipt from overtaking pages already captured by pressure writeback
+but not yet queued. Completion progresses even if the service
+actor blocks overwriting a page still under writeback. Ordinary Write replies keep
+their synchronous data-completion contract. Neither path issues a checkpoint or
+device-cache flush per data batch.
 Node/metadata caches, block allocation, GC and recovery remain owned by F2FS.
 
 The VFS worker drains dirty data and then requests a volume checkpoint every
@@ -101,10 +130,11 @@ would bypass dirty data held by the media implementation.
 
 ## Fit for HypeR
 
-The initial Native run demonstrates the property missing from a purely serial
-sector writer: four outstanding queue writes and aggregation of a 4 MiB payload
-plus 80 small files into 23 write submissions. See the [acceptance test](https://github.com/HypeR-Proj/system-tests/blob/main/fs-f2fs/README.md).
-This makes the port a plausible writeback experiment for the I/O VM transport.
+The Native acceptance suite exercises block aggregation and persistent payloads;
+see the [acceptance test](https://github.com/HypeR-Proj/system-tests/blob/main/fs-f2fs/README.md).
+Actual submission counts and in-flight depth depend on range geometry and device
+completion timing. The bounded submission/completion split allows write overlap;
+its physical throughput and tail-latency benefit require Pi5 measurements.
 
 The remaining performance risks include metadata heap growth and bounded data
 staging in the C++ core; payload still crosses cache,

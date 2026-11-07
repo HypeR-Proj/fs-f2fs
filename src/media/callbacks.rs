@@ -24,6 +24,8 @@ pub(super) fn descriptor<D: Device>(
         flush: flush::<D>,
         uuid,
         run: run::<D>,
+        submit: submit::<D>,
+        complete,
     })
 }
 fn range<D: Device>(device: &D, offset: u64, length: usize) -> Result<(), Error> {
@@ -137,4 +139,73 @@ unsafe extern "C" fn run<D: Device>(
         operations.push(operation);
     }
     code(device.run(&mut operations))
+}
+
+// A thin allocation makes the private C pointer independent of Rust trait-object
+// layout. It is allocated before submission and owns all accepted completions.
+struct CompletionOwner(Option<Box<dyn super::DeviceCompletion>>);
+unsafe extern "C" fn submit<D: Device>(
+    context: *mut c_void,
+    requests: *const ffi::Io,
+    count: usize,
+    output: *mut *mut c_void,
+) -> i32 {
+    // SAFETY: Bcache supplies one live output slot for this synchronous callback.
+    unsafe {
+        *output = std::ptr::null_mut();
+    }
+    let mut completion = match super::try_box(CompletionOwner(None)) {
+        Ok(completion) => completion,
+        Err(error) => return error.0,
+    };
+    // SAFETY: The mount owns the stable callback context and count ABI records.
+    let (owner, requests) = unsafe {
+        (
+            &*context.cast::<Mutex<D>>(),
+            std::slice::from_raw_parts(requests, count),
+        )
+    };
+    let Ok(mut device) = owner.lock() else {
+        return IO.0;
+    };
+    let mut operations = Vec::new();
+    if operations.try_reserve_exact(count).is_err() {
+        return -4;
+    }
+    for request in requests {
+        if request.kind != 1 {
+            return INVALID.0;
+        }
+        if let Err(e) = range(&*device, request.offset, request.length) {
+            return e.0;
+        }
+        if request.length == 0 {
+            continue;
+        }
+        // SAFETY: Ordinary write sources remain immutable through submission;
+        // the device consumes/copies them before returning its completion owner.
+        let input = unsafe { std::slice::from_raw_parts(request.data, request.length) };
+        operations.push(Operation::Write {
+            offset: request.offset,
+            input,
+            fua: false,
+        });
+    }
+    completion.0 = match device.submit(&mut operations) {
+        Ok(owner) => Some(owner),
+        Err(error) => return error.0,
+    };
+    // SAFETY: The caller takes exclusive ownership and consumes via complete.
+    unsafe {
+        *output = Box::into_raw(completion).cast();
+    }
+    0
+}
+unsafe extern "C" fn complete(context: *mut c_void) -> i32 {
+    // SAFETY: Bcache passes exactly once the live allocation returned by submit.
+    let mut completion = unsafe { Box::from_raw(context.cast::<CompletionOwner>()) };
+    match completion.0.take() {
+        Some(owner) => code(owner.wait()),
+        None => INVALID.0,
+    }
 }
